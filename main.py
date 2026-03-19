@@ -108,6 +108,50 @@ async def _generation_loop():
                     rul_hours=rul_hours,
                 )
 
+                # If LSTM is ready and the recommender suggests a crew-facing
+                # action, create an immediate alert so the crew is notified.
+                try:
+                    action = dqn_rec.get("action") if isinstance(dqn_rec, dict) else None
+                    dqn_conf = float(dqn_rec.get("confidence", 0.0)) if isinstance(dqn_rec, dict) else 0.0
+                    action_requires_crew = action in constants.ACTIONS_REQUIRING_CREW
+
+                    if lstm_pred and action and action_requires_crew and (
+                        failure_prob >= constants.LSTM_ALERT_FAILURE_PROB or dqn_conf >= constants.DQN_ALERT_CONFIDENCE
+                    ):
+                        now_dt_l = datetime.fromisoformat(ts)
+                        last_ts_l = _alert_last_ts.get(location)
+                        cooldown_ok_l = (
+                            last_ts_l is None or
+                            (now_dt_l - last_ts_l).total_seconds() >= ALERT_COOLDOWN_SECONDS
+                        )
+
+                        if cooldown_ok_l:
+                            severity = "CRITICAL" if failure_prob > constants.LSTM_CRITICAL_SEVERITY_THRESHOLD else "WARNING"
+                            fault_type = constants.ACTIONS_TO_FAULT.get(action)
+                            db.insert_alert(
+                                location_name=location,
+                                timestamp=ts,
+                                severity=severity,
+                                fault_type=fault_type,
+                                top_probability=dqn_conf,
+                                sensor_data=reading,
+                            )
+                            # Broadcast the LSTM-triggered crew alert to clients
+                            await _broadcast({
+                                "type":       "alert",
+                                "source":     "lstm",
+                                "location":   location,
+                                "severity":   severity,
+                                "action":     action,
+                                "fault_type": fault_type,
+                                "top_prob":   dqn_conf,
+                                "timestamp":  ts,
+                            })
+                            _alert_last_ts[location] = now_dt_l
+                except Exception:
+                    # Non-fatal: don't let alert logic break the main loop
+                    pass
+
                 # Alert debounce: increment consecutive counter on anomaly,
                 # reset to 0 on any nominal reading.  Only fire when the
                 # counter hits ALERT_MIN_CONSECUTIVE AND cooldown has elapsed.

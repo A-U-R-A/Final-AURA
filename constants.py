@@ -3,6 +3,8 @@ DATA_GENERATION_INTERVAL = 1  # seconds between ticks
 DEFAULT_DATA_POINT_AMOUNT = 50
 DATA_ROWS_IN_QUEUE = 5_000
 
+
+
 ### Paths ###
 DATABASE_PATH = "data/aura.db"
 IF_MODEL_PATH = "models/isolationForestModel.joblib"

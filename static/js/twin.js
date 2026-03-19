@@ -428,7 +428,7 @@ function _buildStarfield() {
 function _buildEarthGlow() {
   // A large sphere far below — gives subtle blue-green ambient glow of Earth
   const earth = new THREE.Mesh(
-    new THREE.SphereGeometry(320, 32, 32),
+    new THREE.SphereGeometry(300, 32, 32),
     new THREE.MeshStandardMaterial({
       color:             0x0a1e3a,
       emissive:          0x071428,
