@@ -10,7 +10,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // ── Colors (match AURA CSS vars) ─────────────────────────────────────────────
 const CLR = {
-  nominal:    0xaba372,   // #aba372 accent
+  nominal:    0x5fe61f,   // #5fe61f accent
   anomaly:    0xff3d40,
   module:     0xc8c4b8,   // warm grey modules
   moduleDark: 0xa09c90,
@@ -31,7 +31,7 @@ const MODULE_POS = {
   'Columbus':      new THREE.Vector3(10,    0,  -2  ),
   'JLP & JPM':     new THREE.Vector3(-12,   0,  -5  ),
   'Node 1':        new THREE.Vector3( 0,    0,  25  ),
-  'Cupola':        new THREE.Vector3(-2,   -5,  27  ),
+  'Cupola':        new THREE.Vector3(-3,   -5,  27  ),
   'Joint Airlock': new THREE.Vector3(10,    0,  25  ),
 };
 
