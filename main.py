@@ -42,6 +42,13 @@ _alert_consec:  dict[str, int]      = {}   # consecutive anomalous tick count
 ALERT_MIN_CONSECUTIVE  = 5    # ticks of sustained anomaly before alerting
 ALERT_COOLDOWN_SECONDS = 300  # min seconds between repeat alerts for same location/fault
 
+# Fault latch: once RF confidence >= LATCH_THRESHOLD the detected fault is pinned
+# for that location and will keep showing even on nominal IF ticks, until the user
+# explicitly resolves it via DELETE /api/faults/latch/{location}.
+_latched_fault:  dict[str, str] = {}
+_latch_alerted:  set[str]       = set()   # locations that have had their latch alert fired
+LATCH_THRESHOLD = 0.90
+
 
 async def _broadcast(message: dict):
     """Send a JSON message to all connected WebSocket clients."""
@@ -158,15 +165,45 @@ async def _generation_loop():
                 # drives sensor drift in the generator.  The frontend only learns
                 # about a fault once IF flags anomalous AND RF classifies it with
                 # >= 60 % confidence.  This keeps visuals 100 % AI-driven.
+                # Once RF confidence hits LATCH_THRESHOLD (90%), the fault display
+                # is pinned for that location and will not bounce back to nominal
+                # until the user explicitly resolves it.
                 detected_fault = None
                 if if_label == -1 and rf_class:
                     _top_fault, _top_prob = max(rf_class.items(), key=lambda x: x[1])
                     if _top_prob >= 0.60:
                         detected_fault = _top_fault
+                    if _top_prob >= LATCH_THRESHOLD:
+                        newly_latched = location not in _latched_fault
+                        _latched_fault[location] = _top_fault
+                        if newly_latched and location not in _latch_alerted:
+                            _latch_alerted.add(location)
+                            db.insert_alert(
+                                location_name=location,
+                                timestamp=ts,
+                                severity="CRITICAL",
+                                fault_type=_top_fault,
+                                top_probability=_top_prob,
+                                sensor_data=reading,
+                            )
+                            await _broadcast({
+                                "type":       "alert",
+                                "location":   location,
+                                "severity":   "CRITICAL",
+                                "fault_type": _top_fault,
+                                "top_prob":   _top_prob,
+                                "timestamp":  ts,
+                                "latched":    True,
+                            })
+
+                # Honor the latch even when IF returns nominal
+                if detected_fault is None and location in _latched_fault:
+                    detected_fault = _latched_fault[location]
 
                 location_states[location] = {
                     "active_fault": detected_fault,
                     "is_anomalous": if_label == -1,
+                    "latched": location in _latched_fault,
                 }
 
                 tick_msg = {
@@ -331,6 +368,8 @@ def clear_all_faults():
     lstm.clear_buffer()
     _alert_consec.clear()
     _alert_last_ts.clear()
+    _latched_fault.clear()
+    _latch_alerted.clear()
     return {"status": "ok"}
 
 
@@ -343,6 +382,20 @@ def clear_location_fault(location_name: str):
     lstm.clear_buffer(location_name)
     _alert_consec.pop(location_name, None)
     _alert_last_ts.pop(location_name, None)
+    _latched_fault.pop(location_name, None)
+    _latch_alerted.discard(location_name)
+    return {"status": "ok", "location": location_name}
+
+
+@app.delete("/api/faults/latch/{location_name}")
+def resolve_latched_fault(location_name: str):
+    """Resolve (un-latch) a pinned fault for a location without clearing the
+    underlying fault injection or resetting drift.  Use this when the fault has
+    been physically addressed and the display should return to AI-driven state."""
+    if location_name not in constants.LOCATIONS:
+        raise HTTPException(404, f"Location {location_name!r} not found")
+    _latched_fault.pop(location_name, None)
+    _latch_alerted.discard(location_name)
     return {"status": "ok", "location": location_name}
 
 

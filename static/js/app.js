@@ -165,6 +165,9 @@ function handleWsMessage(msg) {
     const probText  = msg.top_prob ? ` (${(msg.top_prob * 100).toFixed(0)}%)` : "";
     showToast(`⚠ ${msg.severity}: ${faultText}${probText} @ ${msg.location}`, "error");
     refreshAlertBadge();
+    if (msg.latched) {
+      showLatchPopup(msg.location, faultText, msg.top_prob || 0);
+    }
 
   } else if (msg.type === "tick") {
     // Cache live sensor data and DQN per location
@@ -268,6 +271,7 @@ function buildDigitalTwin() {
   });
   $("btn-clear-faults").addEventListener("click", clearAllFaults);
   $("btn-clear-data").addEventListener("click", clearData);
+  $("latch-popup-dismiss").addEventListener("click", dismissLatchPopup);
 }
 
 function updateTwinIndicators() {
@@ -424,8 +428,12 @@ function makeLocationCard(loc) {
     dqnHtml = `<span class="loc-dqn ${cls}">DQN: ${dqnRec.action} (${conf}%)</span>`;
   }
 
+  const isLatched = !!(locState.latched);
   const faultHtml = activeFault
-    ? `<div class="loc-card-fault">⚠ Detected: ${activeFault}</div>`
+    ? `<div class="loc-card-fault">
+         ⚠ Detected: ${activeFault}
+         ${isLatched ? `<button class="resolve-latch-btn" data-location="${loc}" title="Mark as resolved">Resolve</button>` : ""}
+       </div>`
     : "";
 
   const cardId = `loc-card-${loc.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "")}`;
@@ -444,12 +452,28 @@ function makeLocationCard(loc) {
     <div class="loc-card-footer">${dqnHtml}</div>
   `;
 
-  card.addEventListener("click", () => {
+  card.addEventListener("click", (e) => {
+    if (e.target.classList.contains("resolve-latch-btn")) return;
     $("detail-location").value = loc;
     onDetailLocationChange();
     document.querySelector('.tab[data-page="detail"]').click();
     loadDetailChart();
   });
+
+  const resolveBtn = card.querySelector(".resolve-latch-btn");
+  if (resolveBtn) {
+    resolveBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const location = resolveBtn.dataset.location;
+      try {
+        await apiDelete(`/api/faults/latch/${encodeURIComponent(location)}`);
+        showToast(`Fault resolved @ ${location}`, "success");
+        await refreshLocationStates();
+      } catch (err) {
+        showToast(`Error: ${err.message}`, "error");
+      }
+    });
+  }
 
   return card;
 }
@@ -459,7 +483,10 @@ function updateLocationCardInPlace(loc, sensorData, dqnRec, ifLabel) {
   const card = document.getElementById(cardId);
   if (!card) return;
 
-  const isAnomalous = !!(state.locationStates[loc] && state.locationStates[loc].active_fault);
+  const locState   = state.locationStates[loc] || {};
+  const activeFault = locState.active_fault || null;
+  const isLatched   = !!(locState.latched);
+  const isAnomalous = !!activeFault;
   const { parameter_nominal_ranges } = state.config;
 
   // Update card class and header badge
@@ -468,6 +495,33 @@ function updateLocationCardInPlace(loc, sensorData, dqnRec, ifLabel) {
   if (badge) {
     badge.className = `loc-status-badge ${isAnomalous ? "anomalous" : "nominal"}`;
     badge.textContent = isAnomalous ? "FAULT" : "NOMINAL";
+  }
+
+  // Update fault banner + resolve button
+  let faultEl = card.querySelector(".loc-card-fault");
+  if (activeFault) {
+    if (!faultEl) {
+      faultEl = document.createElement("div");
+      faultEl.className = "loc-card-fault";
+      card.querySelector(".loc-card-header").insertAdjacentElement("afterend", faultEl);
+    }
+    let resolveBtn = faultEl.querySelector(".resolve-latch-btn");
+    faultEl.innerHTML = `⚠ Detected: ${activeFault} ${isLatched ? `<button class="resolve-latch-btn" data-location="${loc}" title="Mark as resolved">Resolve</button>` : ""}`;
+    resolveBtn = faultEl.querySelector(".resolve-latch-btn");
+    if (resolveBtn) {
+      resolveBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try {
+          await apiDelete(`/api/faults/latch/${encodeURIComponent(loc)}`);
+          showToast(`Fault resolved @ ${loc}`, "success");
+          await refreshLocationStates();
+        } catch (err) {
+          showToast(`Error: ${err.message}`, "error");
+        }
+      });
+    }
+  } else if (faultEl) {
+    faultEl.remove();
   }
 
   // Update sensor rows in place
@@ -1110,6 +1164,67 @@ function showToast(msg, type = "info") {
   el.className = `toast ${type}`;
   if (toastTimeout) clearTimeout(toastTimeout);
   toastTimeout = setTimeout(() => el.classList.add("hidden"), 4000);
+}
+
+// ============================================================
+//  LATCH ALERT POPUP & ALARM
+// ============================================================
+
+// Set to true to enable the alarm sound when a fault is latched.
+const ALARM_SOUND_ENABLED = false;
+
+let _alarmCtx = null;
+let _alarmNodes = [];
+
+function _startAlarm() {
+  if (!ALARM_SOUND_ENABLED) return;
+  _stopAlarm();
+  _alarmCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  function _beepCycle() {
+    if (!_alarmCtx) return;
+    const now = _alarmCtx.currentTime;
+    // Two-tone klaxon: 880 Hz then 660 Hz, each 0.18 s, gap 0.12 s
+    [[880, now], [660, now + 0.3]].forEach(([freq, t]) => {
+      const osc  = _alarmCtx.createOscillator();
+      const gain = _alarmCtx.createGain();
+      osc.type = "square";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.18, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      osc.connect(gain);
+      gain.connect(_alarmCtx.destination);
+      osc.start(t);
+      osc.stop(t + 0.18);
+      _alarmNodes.push(osc, gain);
+    });
+  }
+
+  _beepCycle();
+  _alarmCtx._interval = setInterval(_beepCycle, 1200);
+}
+
+function _stopAlarm() {
+  if (_alarmCtx) {
+    clearInterval(_alarmCtx._interval);
+    _alarmNodes.forEach(n => { try { n.disconnect(); } catch (_) {} });
+    _alarmNodes = [];
+    _alarmCtx.close();
+    _alarmCtx = null;
+  }
+}
+
+function showLatchPopup(location, faultType, confidence) {
+  $("latch-popup-location").textContent = location;
+  $("latch-popup-fault").textContent    = faultType;
+  $("latch-popup-conf").textContent     = `RF Confidence: ${(confidence * 100).toFixed(0)}%`;
+  $("latch-overlay").classList.remove("hidden");
+  _startAlarm();
+}
+
+function dismissLatchPopup() {
+  $("latch-overlay").classList.add("hidden");
+  _stopAlarm();
 }
 
 // ── Start ────────────────────────────────────────────────────────────────────

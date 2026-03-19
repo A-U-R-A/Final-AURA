@@ -256,6 +256,26 @@
 ===================================================================== -->
 <div id="toast" class="toast hidden"></div>
 
+<!-- =====================================================================
+     LATCH ALERT POPUP
+===================================================================== -->
+<div id="latch-overlay" class="latch-overlay hidden" role="alertdialog" aria-modal="true" aria-labelledby="latch-popup-title">
+  <div class="latch-popup">
+    <div class="latch-popup-header">
+      <span class="latch-popup-icon">⚠</span>
+      <span id="latch-popup-title" class="latch-popup-title">FAULT CONFIRMED</span>
+    </div>
+    <div class="latch-popup-body">
+      <div class="latch-popup-location" id="latch-popup-location"></div>
+      <div class="latch-popup-fault" id="latch-popup-fault"></div>
+      <div class="latch-popup-conf" id="latch-popup-conf"></div>
+    </div>
+    <div class="latch-popup-footer">
+      <button class="btn btn-danger" id="latch-popup-dismiss">Acknowledge</button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/js/app.js?v=2"></script>
 <script type="module" src="/static/js/twin.js?v=2"></script>
 </body>

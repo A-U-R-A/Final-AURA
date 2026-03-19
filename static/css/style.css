@@ -488,6 +488,28 @@ h3:first-child { margin-top: 0; }
   font-family: var(--font-mono);
   background: rgba(255,171,0,0.07);
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.resolve-latch-btn {
+  margin-left: auto;
+  padding: 1px 7px;
+  font-size: 8px;
+  font-family: var(--font-mono);
+  background: transparent;
+  border: 1px solid var(--warning);
+  color: var(--warning);
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.resolve-latch-btn:hover {
+  background: var(--warning);
+  color: #000;
 }
 
 .loc-card-sensors {
@@ -696,6 +718,92 @@ h3:first-child { margin-top: 0; }
 .toast.success { border-color: var(--nominal-dim); color: var(--nominal); }
 .toast.error   { border-color: var(--danger-dim);  color: var(--danger); }
 .toast.info    { border-color: #4d4530;             color: var(--info); }
+
+/* ============================================================
+   LATCH ALERT POPUP
+   ============================================================ */
+.latch-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  animation: latch-fadein 0.2s ease;
+}
+.latch-overlay.hidden {
+  display: none;
+}
+@keyframes latch-fadein {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.latch-popup {
+  background: var(--surface);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  box-shadow: 0 0 32px rgba(255, 61, 64, 0.35), var(--shadow);
+  width: 360px;
+  max-width: 90vw;
+  animation: latch-popup-in 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes latch-popup-in {
+  from { transform: scale(0.88); opacity: 0; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+.latch-popup-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--danger-dim);
+}
+.latch-popup-icon {
+  font-size: 20px;
+  color: var(--danger);
+  animation: latch-pulse 1s ease-in-out infinite;
+}
+@keyframes latch-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+.latch-popup-title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--danger);
+}
+.latch-popup-body {
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.latch-popup-location {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.latch-popup-fault {
+  font-size: 15px;
+  font-family: var(--font-mono);
+  color: var(--text, #ddd);
+  font-weight: 600;
+}
+.latch-popup-conf {
+  font-size: 11px;
+  color: var(--danger);
+  font-family: var(--font-mono);
+}
+.latch-popup-footer {
+  padding: 10px 18px 14px;
+  display: flex;
+  justify-content: flex-end;
+}
 
 /* ============================================================
    DASHBOARD — prediction bar
