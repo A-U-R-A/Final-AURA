@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="110.043 134.615 219.017 210.47">
+  <g id="eOUi2aemLNq1" transform="matrix(1, 0, 0, 1, 55.555557, 2.136752)">
+    <rect width="75.495" height="35.465" x="190.05" y="167.573" style="stroke-width: 1.206; fill: rgb(215, 215, 215);"/>
+    <rect width="75.495" height="35.465" x="190.05" y="288.48" style="stroke-width: 1.206; fill: rgb(215, 215, 215);"/>
+    <rect width="75.495" height="35.465" x="71.954" y="288.48" style="stroke-width: 1.206; fill: rgb(215, 215, 215);"/>
+    <rect width="87.605" height="35.465" x="59.844" y="167.573" style="stroke-width: 1.338; fill: rgb(215, 215, 215);"/>
+    <rect width="32.714" height="58.928" x="152.698" y="167.573" style="stroke-width: 0.996; stroke: rgb(197, 197, 197); fill: rgb(215, 215, 215);"/>
+    <rect width="32.714" height="50.519" x="152.698" y="232.201" style="stroke-width: 0.905; fill: rgb(215, 215, 215);"/>
+    <rect width="32.714" height="35.465" x="152.698" y="288.48" style="stroke-width: 0.741; fill: rgb(215, 215, 215);"/>
+    <circle r="27.5" transform="matrix(0.672727, 0, 0, 0.548961, 85.146706, 170.209076)" style="fill: rgb(215, 215, 215);"/>
+    <text style="fill: rgb(215, 215, 215); font-family: &quot;eOUi2aemLNq1:::Roboto&quot;; font-size: 15px; stroke-width: 0px; white-space: pre;" x="193.888" y="217.106">
+Columbus
+</text>
+    <text style="fill: rgb(215, 215, 215); font-family: &quot;eOUi2aemLNq1:::Roboto&quot;; font-size: 15px; stroke-width: 0px; white-space: pre;" x="71.954" y="218.875">
+JPM 
+</text>
+    <text style="fill: rgb(215, 215, 215); font-family: &quot;eOUi2aemLNq1:::Roboto&quot;; font-size: 15px; stroke-width: 0px; white-space: pre;" x="72.238" y="151.449">
+JLP
+</text>
+    <text transform="matrix(0, 1.035054, -1, 0, 140.322739, 236.351166)" style="fill: rgb(215, 215, 215); font-family: &quot;eOUi2aemLNq1:::Roboto&quot;; font-size: 13px; stroke-width: 0px; white-space: pre;" y="0">
+US Lab
+</text>
+    <text style="fill: rgb(215, 215, 215); font-family: &quot;eOUi2aemLNq1:::Roboto&quot;; font-size: 15px; stroke-width: 0px; white-space: pre;" x="80.241" y="284.816">
+Cupola
+</text>
+    <text style="fill: rgb(215, 215, 215); font-family: &quot;eOUi2aemLNq1:::Roboto&quot;; font-size: 13px; stroke-width: 0px; white-space: pre;" x="193.111" y="287.117">
+Joint Airlock
+</text>
+    <text style="fill: rgb(215, 215, 215); font-family: &quot;eOUi2aemLNq1:::Roboto&quot;; font-size: 15px; stroke-width: 0px; white-space: pre;" x="145.149" y="163.909">
+Node 2
+</text>
+    <text style="fill: rgb(215, 215, 215); font-family: &quot;eOUi2aemLNq1:::Roboto&quot;; font-size: 15px; stroke-width: 0px; white-space: pre;" x="145.149" y="337.867">
+Node 1
+</text>
+  </g>
+</svg>

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AURA — ECLSS Predictive Maintenance</title>
+  <link rel="icon" type="image/png" href="/static/assets/logo_gold.png" />
+  <link rel="shortcut icon" type="image/png" href="/static/assets/logo_gold.png" />
+  <link rel="stylesheet" href="/static/css/style.css?v=2" />
+  <!-- Chart.js via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <!-- Three.js importmap -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+
+<!-- =====================================================================
+     TOP BAR
+===================================================================== -->
+<header class="topbar">
+  <div class="topbar-left">
+    <span class="logo-text">AURA</span>
+    <span class="logo-sub">ECLSS Predictive Maintenance</span>
+  </div>
+  <nav class="tabs">
+    <button class="tab active" data-page="twin">Digital Twin</button>
+    <button class="tab" data-page="dashboard">Dashboard</button>
+    <button class="tab" data-page="detail">Sensor Detail</button>
+    <button class="tab" data-page="trends">Trends</button>
+    <button class="tab" data-page="alerts">Alerts <span id="alert-badge" class="alert-badge hidden">0</span></button>
+    <button class="tab" data-page="analyst">AI Analyst</button>
+    <button class="tab" data-page="maintenance">Maintenance</button>
+  </nav>
+  <div class="topbar-right">
+    <span class="status-badge" id="system-status">● INITIALIZING</span>
+    <span class="ws-indicator" id="ws-indicator" title="WebSocket">⬤</span>
+  </div>
+</header>
+
+<!-- =====================================================================
+     PAGES
+===================================================================== -->
+<main id="main">
+
+  <!-- ── DIGITAL TWIN ─────────────────────────────────────────────── -->
+  <section class="page active" id="page-twin">
+    <div class="twin-layout">
+      <div class="twin-container" id="twin-container">
+        <!-- Three.js canvas injected here -->
+      </div>
+      <aside class="twin-sidebar">
+        <h3>Module Status</h3>
+        <div id="location-list" class="location-list"></div>
+
+        <h3>Fault Injection</h3>
+        <div class="control-group">
+          <label>Location</label>
+          <select id="inject-location"></select>
+        </div>
+        <div class="control-group">
+          <label>Fault</label>
+          <select id="inject-fault"></select>
+        </div>
+        <button class="btn btn-danger" id="btn-inject">Inject Fault</button>
+
+        <h3>Controls</h3>
+        <button class="btn btn-warning" id="btn-clear-faults">Clear All Faults</button>
+        <button class="btn btn-ghost" id="btn-clear-data">Clear All Data</button>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ── DASHBOARD ─────────────────────────────────────────────────── -->
+  <section class="page" id="page-dashboard">
+    <div class="dashboard-header">
+      <h2>ECLSS System Overview</h2>
+      <button class="btn btn-ghost btn-sm" id="btn-dashboard-refresh">Refresh</button>
+    </div>
+    <div class="dashboard-body">
+      <div id="location-cards-grid" class="location-cards-grid"></div>
+    </div>
+  </section>
+
+  <!-- ── SENSOR DETAIL ─────────────────────────────────────────────── -->
+  <section class="page" id="page-detail">
+    <div class="detail-controls">
+      <div class="control-group">
+        <label>Location</label>
+        <select id="detail-location"></select>
+      </div>
+      <div class="control-group">
+        <label>Parameter</label>
+        <select id="detail-parameter"></select>
+      </div>
+      <div class="control-group">
+        <label>Points</label>
+        <select id="detail-n">
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+          <option value="200">200</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" id="btn-detail-load">Load</button>
+      <label class="checkbox-label">
+        <input type="checkbox" id="detail-live" checked />
+        Live
+      </label>
+    </div>
+    <div class="detail-chart-card">
+      <canvas id="detail-chart"></canvas>
+    </div>
+    <div class="detail-table-wrap">
+      <table id="detail-table" class="data-table">
+        <thead><tr><th>Timestamp</th><th id="detail-table-param-header">Value</th></tr></thead>
+        <tbody id="detail-table-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── TRENDS ───────────────────────────────────────────────────── -->
+  <section class="page" id="page-trends">
+    <div class="trends-controls">
+      <div class="control-group">
+        <label>Location</label>
+        <select id="trends-location"></select>
+      </div>
+      <div class="control-group">
+        <label>Readings</label>
+        <select id="trends-n">
+          <option value="60">60</option>
+          <option value="100" selected>100</option>
+          <option value="200">200</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" id="btn-trends-load">Analyze</button>
+      <label class="checkbox-label">
+        <input type="checkbox" id="trends-auto" checked />
+        Auto-refresh (30s)
+      </label>
+    </div>
+    <div id="trends-grid" class="trends-grid"></div>
+  </section>
+
+  <!-- ── ALERTS ───────────────────────────────────────────────────── -->
+  <section class="page" id="page-alerts">
+    <div class="alerts-header">
+      <h2>Alert History</h2>
+      <div class="alerts-controls">
+        <label class="checkbox-label">
+          <input type="checkbox" id="alerts-unacked-only" />
+          Unacknowledged only
+        </label>
+        <div class="control-group inline">
+          <label>Location</label>
+          <select id="alerts-location-filter">
+            <option value="">All locations</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" id="btn-alerts-refresh">Refresh</button>
+        <button class="btn btn-ghost" id="btn-ack-all">Acknowledge All</button>
+      </div>
+    </div>
+    <div id="alerts-list" class="alerts-list"></div>
+  </section>
+
+  <!-- ── AI ANALYST ───────────────────────────────────────────────── -->
+  <section class="page" id="page-analyst">
+    <div class="analyst-layout">
+      <div class="analyst-controls card">
+        <h3>AI Analysis</h3>
+        <div class="control-group">
+          <label>Location</label>
+          <select id="analyst-location"></select>
+        </div>
+        <div class="control-group">
+          <label>Model</label>
+          <select id="analyst-model">
+            <option value="mistral">mistral</option>
+            <option value="llama3.1:8b">llama3.1:8b</option>
+            <option value="llama3">llama3</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" id="btn-analyze">Analyze</button>
+        <div class="analyst-status" id="analyst-status"></div>
+      </div>
+      <div class="analyst-output card">
+        <div class="analyst-output-header">
+          <h3>Response</h3>
+          <button class="btn btn-ghost btn-sm" id="btn-analyst-clear">Clear</button>
+        </div>
+        <pre id="analyst-output-text" class="analyst-text">Run an analysis to see results here.</pre>
+      </div>
+      <div class="analyst-labels card">
+        <h3>Recent Anomaly Labels</h3>
+        <div id="analyst-labels-list" class="labels-list"></div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ── MAINTENANCE ─────────────────────────────────────────────── -->
+  <section class="page" id="page-maintenance">
+    <div class="maintenance-header">
+      <h2>ECLSS Maintenance Schedule</h2>
+      <div class="mission-clock">
+        <span class="mission-clock-label">Mission Elapsed</span>
+        <span id="mission-elapsed" class="mission-clock-value">—</span>
+      </div>
+      <button class="btn btn-primary" id="btn-maintenance-refresh">Refresh</button>
+    </div>
+
+    <div class="maintenance-body">
+
+      <!-- Replacement Schedule -->
+      <div class="maint-section">
+        <h3>Subsystem Replacement Schedule
+          <span class="maint-subtitle">Based on observed ISS ECLSS MTBF data</span>
+        </h3>
+        <div id="replacement-grid" class="replacement-grid"></div>
+      </div>
+
+      <!-- Calibration Schedule -->
+      <div class="maint-section">
+        <h3>Sensor Calibration Schedule
+          <span class="maint-subtitle">Drift accumulation since last calibration baseline</span>
+        </h3>
+        <table class="maint-table" id="calibration-table">
+          <thead>
+            <tr>
+              <th>Sensor / Parameter</th>
+              <th>Drift Rate</th>
+              <th>Accumulated Drift</th>
+              <th>Weeks Until Due</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="calibration-body"></tbody>
+        </table>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<!-- =====================================================================
+     TOAST NOTIFICATION
+===================================================================== -->
+<div id="toast" class="toast hidden"></div>
+
+<script src="/static/js/app.js?v=2"></script>
+<script type="module" src="/static/js/twin.js?v=2"></script>
+</body>
+</html>
