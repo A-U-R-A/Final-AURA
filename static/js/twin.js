@@ -102,6 +102,21 @@ window.twinInit = function (container, onModuleClick) {
   controls.maxDistance      = 250;
   controls.maxPolarAngle    = Math.PI * 0.80;
   controls.update();
+  controls.saveState();
+
+  const resetBtn = document.getElementById('btn-reset-camera');
+  controls.addEventListener('change', () => {
+    // Check if the target has deviated from the default center (0, 0, 12)
+    const currentTarget = controls.target;
+    const defaultTarget = new THREE.Vector3(0, 0, 12);
+    if (resetBtn) {
+      if (currentTarget.distanceTo(defaultTarget) > 0.1) {
+        resetBtn.style.display = 'block';
+      } else {
+        resetBtn.style.display = 'none';
+      }
+    }
+  });
 
   // Lighting — directional sun + deep-space ambient
   const sun = new THREE.DirectionalLight(CLR.sun, 4.0);
@@ -153,6 +168,15 @@ window.twinInit = function (container, onModuleClick) {
   renderer.domElement.addEventListener('mouseup', () => {
     renderer.domElement.style.cursor = 'grab';
   });
+
+  window.twinResetCamera = () => {
+    controls.enableDamping = false;
+    controls.update(); // Flush out the remaining velocity/momentum delta first
+    controls.reset();  // Put camera back to the exact saved state (0, 0, 12 target) 
+    controls.enableDamping = true;
+    const resetBtn = document.getElementById('btn-reset-camera');
+    if (resetBtn) resetBtn.style.display = 'none';
+  };
 
   _animate();
 };

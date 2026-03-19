@@ -261,6 +261,11 @@ function buildDigitalTwin() {
   tryInit();
 
   $("btn-inject").addEventListener("click", injectFault);
+  $("btn-reset-camera").addEventListener("click", () => {
+    if (typeof window.twinResetCamera === "function") {
+      window.twinResetCamera();
+    }
+  });
   $("btn-clear-faults").addEventListener("click", clearAllFaults);
   $("btn-clear-data").addEventListener("click", clearData);
 }
