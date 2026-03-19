@@ -40,6 +40,8 @@ let renderer, scene, camera, controls;
 const indicators  = {};   // location → { mesh: Mesh, light: PointLight, anomalous: false }
 const hitMeshes   = [];   // { mesh: Mesh, location: string }  for raycasting
 let   animClock   = 0;
+let   pointerDown = null;
+let   pointerMoved = false;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function stdMat(color, metalness = 0.65, roughness = 0.35) {
@@ -100,7 +102,7 @@ window.twinInit = function (container, onModuleClick) {
   controls.autoRotateSpeed  = 0.28;
   controls.minDistance      = 18;
   controls.maxDistance      = 250;
-  controls.maxPolarAngle    = Math.PI * 0.80;
+  controls.maxPolarAngle    = Math.PI * 0.98;
   controls.update();
   controls.saveState();
 
@@ -145,8 +147,40 @@ window.twinInit = function (container, onModuleClick) {
   });
   ro.observe(container);
 
-  // Click → module selection
+  controls.addEventListener('start', () => {
+    pointerMoved = true;
+  });
+
+  renderer.domElement.addEventListener('pointerdown', e => {
+    pointerDown = { x: e.clientX, y: e.clientY };
+    pointerMoved = false;
+  });
+
+  renderer.domElement.addEventListener('pointermove', e => {
+    if (!pointerDown) return;
+    const dx = e.clientX - pointerDown.x;
+    const dy = e.clientY - pointerDown.y;
+    if ((dx * dx + dy * dy) > 16) {
+      pointerMoved = true;
+    }
+  });
+
+  renderer.domElement.addEventListener('pointerup', () => {
+    pointerDown = null;
+  });
+
+  renderer.domElement.addEventListener('pointercancel', () => {
+    pointerDown = null;
+    pointerMoved = false;
+  });
+
+  // Click → module selection (only true click, not drag)
   renderer.domElement.addEventListener('click', e => {
+    if (pointerMoved) {
+      pointerMoved = false;
+      return;
+    }
+
     const rect = renderer.domElement.getBoundingClientRect();
     const ndc  = new THREE.Vector2(
       ((e.clientX - rect.left) / rect.width)  *  2 - 1,
@@ -460,9 +494,10 @@ function _buildEarthGlow() {
       metalness:         0,
       roughness:         1,
       side:              THREE.BackSide,
+      depthWrite:        false,
     })
   );
-  earth.position.set(0, -380, 30);
+  earth.position.set(0, -520, 30);
   scene.add(earth);
 
   // Earth-reflected light
