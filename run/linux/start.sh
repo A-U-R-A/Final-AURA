@@ -31,7 +31,7 @@ echo -e "  ==========================================${RESET}"
 echo ""
 
 # ── 1. Locate Python 3.10+ ──────────────────────────────────
-section "1/5" "Checking Python installation..."
+section "1/6" "Checking Python installation..."
 
 PYTHON_CMD=""
 for candidate in python3.12 python3.11 python3.10 python3 python; do
@@ -56,7 +56,7 @@ if [ -z "$PYTHON_CMD" ]; then
 fi
 
 # ── 2. Create / activate virtualenv ─────────────────────────
-section "2/5" "Checking virtual environment..."
+section "2/6" "Checking virtual environment..."
 
 if [ ! -f "${VENV_DIR}/bin/activate" ]; then
     info "Creating .venv at ${VENV_DIR}"
@@ -75,7 +75,7 @@ PYTHON_CMD="python"   # use venv python from here on
 export PYTHONIOENCODING=utf-8
 
 # ── 3. Install / upgrade dependencies ───────────────────────
-section "3/5" "Installing dependencies from requirements.txt..."
+section "3/6" "Installing dependencies from requirements.txt..."
 
 [ -f "$REQ_FILE" ] || fatal "requirements.txt not found at ${REQ_FILE}"
 
@@ -101,7 +101,7 @@ else
 fi
 
 # ── 4. Train missing models ──────────────────────────────────
-section "4/5" "Checking ML models..."
+section "4/6" "Checking ML models..."
 
 NEEDS_TRAINING=0
 for model in isolationForestModel.joblib randomForestModel.joblib lstmModel.pt dqnModel.pt; do
@@ -144,8 +144,22 @@ else
     info "All models present."
 fi
 
-# ── 5. Start AURA server ─────────────────────────────────────
-section "5/5" "Starting AURA server..."
+# ── 5. Run API tests ─────────────────────────────────────────
+section "5/6" "Running API tests..."
+
+cd "$AURA_DIR"
+
+# Install pytest + httpx if not already present (lightweight, test-only)
+"$PYTHON_CMD" -m pip install --quiet pytest httpx
+
+if "$PYTHON_CMD" -m pytest test_api.py -q --tb=short; then
+    info "All tests passed."
+else
+    fatal "Tests failed. Fix the errors above before starting the server."
+fi
+
+# ── 6. Start AURA server ─────────────────────────────────────
+section "6/6" "Starting AURA server..."
 
 echo ""
 echo -e "  ${BOLD}Access the dashboard at:${RESET}  ${CYAN}http://localhost:8000${RESET}"
