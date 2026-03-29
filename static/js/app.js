@@ -327,6 +327,13 @@ async function clearData() {
   if (!confirm("Clear ALL sensor data? This cannot be undone.")) return;
   try {
     await apiDelete("/api/data");
+
+    // Refresh UI to reflect cleared state
+    await refreshLocationStates();  
+    await refreshDashboard();       
+    refreshAlerts();        
+    refreshAlertBadge();         
+
     showToast("Sensor data cleared", "success");
   } catch (e) {
     showToast(`Error: ${e.message}`, "error");
@@ -577,6 +584,28 @@ function buildDetail() {
   $("detail-live").addEventListener("change", e => {
     state.detailLive = e.target.checked;
   });
+
+  // Register custom interaction mode for chart hover tolerance
+  const Interaction = Chart.Interaction;
+  Interaction.modes.customTolerance = function(chart, e, options, useFinalPosition) {
+    const position = Chart.helpers.getRelativePosition(e, chart);
+    const items = [];
+    chart.data.datasets.forEach((dataset, datasetIndex) => {
+      const meta = chart.getDatasetMeta(datasetIndex);
+      if (meta.data) {
+        meta.data.forEach((element, index) => {
+          const dist = Math.hypot(
+            position.x - element.x,
+            position.y - element.y
+          );
+          if (dist <= options.radius) {
+            items.push({ element, datasetIndex, index });
+          }
+        });
+      }
+    });
+    return items;
+  };
 }
 
 async function loadDetailChart() {
@@ -618,7 +647,7 @@ async function loadDetailChart() {
           borderColor: "#00e676",
           backgroundColor: "rgba(0,230,118,.08)",
           borderWidth: 1.5,
-          pointRadius: 0,
+          pointRadius: 2,
           pointHoverRadius: 4,
           tension: 0.2,
         },
@@ -647,11 +676,16 @@ async function loadDetailChart() {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
+      interaction: {
+        mode: "customTolerance",
+        radius: 5,
+      },
       plugins: {
         legend: {
           labels: { color: "#8499ac", font: { size: 10 } },
         },
       },
+
       scales: {
         x: {
           ticks: { color: "#546478", maxTicksLimit: 10, font: { size: 10 } },
@@ -662,7 +696,7 @@ async function loadDetailChart() {
           grid: { color: "rgba(30,45,66,.8)" },
         },
       },
-    },
+    }
   });
 
   // Populate table
