@@ -283,6 +283,45 @@ FAULT_PRECURSOR_HOURS = {
     "NH3 Coolant Leak":                      2.0,   # Fast detection; NH3 25 ppm caution in <2 h for major leak
 }
 
+### Alert configuration per fault type ─────────────────────────────────────────
+# Each fault has customizable alert sensitivity: how many consecutive anomalous
+# readings trigger an alert, and how long before the next alert can fire.
+# Adjust these to make certain faults alert faster/slower as needed.
+FAULT_ALERT_CONFIG = {
+    "Cabin Leak": {
+        "min_consecutive": 20,    # ~20 seconds at 1 Hz; moderate detection urgency
+        "cooldown_seconds": 300,  # 5 min between repeats
+    },
+    "O2 Generator Failure": {
+        "min_consecutive": 30,    # ~30 sec; OGS failures are gradual, can wait a bit longer
+        "cooldown_seconds": 600,  # 10 min between repeats (degradation is slow)
+    },
+    "O2 Leak": {
+        "min_consecutive": 15,    # ~15 sec; O2 pressure drops quickly, need fast alert
+        "cooldown_seconds": 300,  # 5 min between repeats
+    },
+    "CO2 Scrubber Failure": {
+        "min_consecutive": 15,    # ~15 sec; CO2 rises fast, early warning needed
+        "cooldown_seconds": 300,  # 5 min between repeats
+    },
+    "CHX Failure": {
+        "min_consecutive": 25,    # ~25 sec; humidity/temp rise is gradual
+        "cooldown_seconds": 450,  # 7.5 min between repeats
+    },
+    "Water Processor Failure": {
+        "min_consecutive": 40,    # ~40 sec; water purity degrades over hours, can be patient
+        "cooldown_seconds": 900,  # 15 min between repeats
+    },
+    "Trace Contaminant Filter Saturation": {
+        "min_consecutive": 50,    # ~50 sec; filter saturation is very slow
+        "cooldown_seconds": 1200, # 20 min between repeats
+    },
+    "NH3 Coolant Leak": {
+        "min_consecutive": 10,    # ~10 sec; NH3 spike is fast and dangerous
+        "cooldown_seconds": 300,  # 5 min between repeats
+    },
+}
+
 ### Numeric parameter correlations for Cholesky correlated noise (training) ###
 # Keys are (param_a, param_b), value is Pearson r in [-1, 1]
 PARAMETER_CORRELATION_MATRIX = {

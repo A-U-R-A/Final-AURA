@@ -37,10 +37,10 @@ _ws_clients: Set[WebSocket] = set()
 # then enforce a cooldown before the next one.  This filters out isolated
 # false-positives (random single-tick IF misclassifications) while still
 # catching real sustained faults quickly.
+# N is determined per-fault from constants.FAULT_ALERT_CONFIG.
 _alert_last_ts: dict[str, datetime] = {}
 _alert_consec:  dict[str, int]      = {}   # consecutive anomalous tick count
-ALERT_MIN_CONSECUTIVE  = 5    # ticks of sustained anomaly before alerting
-ALERT_COOLDOWN_SECONDS = 300  # min seconds between repeat alerts for same location/fault
+ALERT_COOLDOWN_SECONDS = 300  # min seconds between repeat alerts for same location/fault (legacy; use per-fault config)
 
 # Fault latch: once RF confidence >= LATCH_THRESHOLD the detected fault is pinned
 # for that location and will keep showing even on nominal IF ticks, until the user
@@ -117,8 +117,8 @@ async def _generation_loop():
 
                 # Alert debounce: increment consecutive counter on anomaly,
                 # reset to 0 on any nominal reading.  Only fire when the
-                # counter hits ALERT_MIN_CONSECUTIVE AND cooldown has elapsed.
-                # P(5 consecutive FPs at 3% FPR) = 0.03^5 ≈ 0.000002 → ~0/day.
+                # counter hits the fault-specific threshold AND cooldown has elapsed.
+                # Thresholds per fault are in constants.FAULT_ALERT_CONFIG.
                 is_anomalous = if_label == -1
                 if is_anomalous:
                     _alert_consec[location] = _alert_consec.get(location, 0) + 1
@@ -130,16 +130,23 @@ async def _generation_loop():
                 # Cooldown key is per-location so bursts at one location don't
                 # block alerts at another.
                 last_ts    = _alert_last_ts.get(location)
+                
+                # Determine alert threshold based on detected fault type
+                top_fault, top_prob = None, None
+                if rf_class:
+                    top_fault, top_prob = max(rf_class.items(), key=lambda x: x[1])
+                
+                # Get per-fault config; fall back to sensible defaults
+                fault_config = constants.FAULT_ALERT_CONFIG.get(top_fault, {})
+                min_consecutive = fault_config.get("min_consecutive", 30)  # default 30 ticks
+                cooldown_seconds = fault_config.get("cooldown_seconds", 300)  # default 5 min
+                
                 cooldown_ok = (
                     last_ts is None or
-                    (now_dt - last_ts).total_seconds() >= ALERT_COOLDOWN_SECONDS
+                    (now_dt - last_ts).total_seconds() >= cooldown_seconds
                 )
 
-                if consec >= ALERT_MIN_CONSECUTIVE and cooldown_ok:
-                    top_fault, top_prob = None, None
-                    if rf_class:
-                        top_fault, top_prob = max(rf_class.items(), key=lambda x: x[1])
-
+                if consec >= min_consecutive and cooldown_ok:
                     severity = "CRITICAL" if (top_prob or 0) > 0.7 else "WARNING"
                     db.insert_alert(
                         location_name=location,
