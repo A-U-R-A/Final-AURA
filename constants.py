@@ -289,7 +289,7 @@ FAULT_PRECURSOR_HOURS = {
 # Adjust these to make certain faults alert faster/slower as needed.
 FAULT_ALERT_CONFIG = {
     "Cabin Leak": {
-        "min_consecutive": 20,    # ~20 seconds at 1 Hz; moderate detection urgency
+        "min_consecutive": 25,    # ~20 seconds at 1 Hz; moderate detection urgency
         "cooldown_seconds": 300,  # 5 min between repeats
     },
     "O2 Generator Failure": {
@@ -297,7 +297,7 @@ FAULT_ALERT_CONFIG = {
         "cooldown_seconds": 600,  # 10 min between repeats (degradation is slow)
     },
     "O2 Leak": {
-        "min_consecutive": 15,    # ~15 sec; O2 pressure drops quickly, need fast alert
+        "min_consecutive": 20,    # ~15 sec; O2 pressure drops quickly, need fast alert
         "cooldown_seconds": 300,  # 5 min between repeats
     },
     "CO2 Scrubber Failure": {

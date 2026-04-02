@@ -139,11 +139,10 @@ async def _generation_loop():
                 # Get per-fault config; fall back to sensible defaults
                 fault_config = constants.FAULT_ALERT_CONFIG.get(top_fault, {})
                 min_consecutive = fault_config.get("min_consecutive", 30)  # default 30 ticks
-                cooldown_seconds = fault_config.get("cooldown_seconds", 300)  # default 5 min
                 
                 cooldown_ok = (
                     last_ts is None or
-                    (now_dt - last_ts).total_seconds() >= cooldown_seconds
+                    (now_dt - last_ts).total_seconds() >= ALERT_COOLDOWN_SECONDS
                 )
 
                 if consec >= min_consecutive and cooldown_ok:
