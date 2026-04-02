@@ -297,11 +297,11 @@ FAULT_ALERT_CONFIG = {
         "cooldown_seconds": 600,  # 10 min between repeats (degradation is slow)
     },
     "O2 Leak": {
-        "min_consecutive": 20,    # ~15 sec; O2 pressure drops quickly, need fast alert
+        "min_consecutive": 25,    # ~15 sec; O2 pressure drops quickly, need fast alert
         "cooldown_seconds": 300,  # 5 min between repeats
     },
     "CO2 Scrubber Failure": {
-        "min_consecutive": 15,    # ~15 sec; CO2 rises fast, early warning needed
+        "min_consecutive": 35,    # ~15 sec; CO2 rises fast, early warning needed
         "cooldown_seconds": 300,  # 5 min between repeats
     },
     "CHX Failure": {
@@ -309,15 +309,15 @@ FAULT_ALERT_CONFIG = {
         "cooldown_seconds": 450,  # 7.5 min between repeats
     },
     "Water Processor Failure": {
-        "min_consecutive": 40,    # ~40 sec; water purity degrades over hours, can be patient
+        "min_consecutive": 25,    # ~40 sec; water purity degrades over hours, can be patient
         "cooldown_seconds": 900,  # 15 min between repeats
     },
     "Trace Contaminant Filter Saturation": {
-        "min_consecutive": 50,    # ~50 sec; filter saturation is very slow
+        "min_consecutive": 25,    # ~50 sec; filter saturation is very slow
         "cooldown_seconds": 1200, # 20 min between repeats
     },
     "NH3 Coolant Leak": {
-        "min_consecutive": 10,    # ~10 sec; NH3 spike is fast and dangerous
+        "min_consecutive": 25,    # ~10 sec; NH3 spike is fast and dangerous
         "cooldown_seconds": 300,  # 5 min between repeats
     },
 }
