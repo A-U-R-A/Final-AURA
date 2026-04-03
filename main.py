@@ -175,7 +175,7 @@ async def _generation_loop():
                 # is pinned for that location and will not bounce back to nominal
                 # until the user explicitly resolves it.
                 detected_fault = None
-                if if_label == -1 and rf_class:
+                if is_anomalous and rf_class:
                     _top_fault, _top_prob = max(rf_class.items(), key=lambda x: x[1])
                     if _top_prob >= 0.60:
                         detected_fault = _top_fault

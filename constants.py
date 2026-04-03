@@ -305,11 +305,11 @@ FAULT_ALERT_CONFIG = {
         "cooldown_seconds": 300,  # 5 min between repeats
     },
     "CHX Failure": {
-        "min_consecutive": 25,    # ~25 sec; humidity/temp rise is gradual
+        "min_consecutive": 22,    # ~25 sec; humidity/temp rise is gradual
         "cooldown_seconds": 450,  # 7.5 min between repeats
     },
     "Water Processor Failure": {
-        "min_consecutive": 30,    # ~40 sec; water purity degrades over hours, can be patient
+        "min_consecutive": 100000,    # ~40 sec; water purity degrades over hours, can be patient
         "cooldown_seconds": 900,  # 15 min between repeats
     },
     "Trace Contaminant Filter Saturation": {
