@@ -1,5 +1,5 @@
 ### Data Generation ###
-DATA_GENERATION_INTERVAL = 1  # seconds between ticks
+DATA_GENERATION_INTERVAL = 0.0001  # seconds between ticks
 DEFAULT_DATA_POINT_AMOUNT = 50
 DATA_ROWS_IN_QUEUE = 5_000
 
@@ -309,7 +309,7 @@ FAULT_ALERT_CONFIG = {
         "cooldown_seconds": 450,  # 7.5 min between repeats
     },
     "Water Processor Failure": {
-        "min_consecutive": 25,    # ~40 sec; water purity degrades over hours, can be patient
+        "min_consecutive": 30,    # ~40 sec; water purity degrades over hours, can be patient
         "cooldown_seconds": 900,  # 15 min between repeats
     },
     "Trace Contaminant Filter Saturation": {
