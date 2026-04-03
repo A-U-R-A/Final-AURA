@@ -1,5 +1,5 @@
 ### Data Generation ###
-DATA_GENERATION_INTERVAL = 0.0001  # seconds between ticks
+DATA_GENERATION_INTERVAL = 1  # seconds between ticks
 DEFAULT_DATA_POINT_AMOUNT = 50
 DATA_ROWS_IN_QUEUE = 5_000
 
