@@ -191,7 +191,7 @@ function handleWsMessage(msg) {
     // Live analyst labels update
     if (state.activePage === "analyst") {
       const loc = $("analyst-location").value;
-      if (msg.location === loc) prependAnalystLabel(msg);
+      if (loc === "all" || msg.location === loc) prependAnalystLabel(msg);
     }
   }
 }
@@ -746,49 +746,255 @@ function pushDetailPoint(timestamp, value, isAnomalous) {
 }
 
 // ============================================================
-//  AI ANALYST
+//  AI ANALYST — chat interface
 // ============================================================
+
+let _chatHistory   = [];   // [{role, content}]
+let _chatStreaming  = false;
+
 function buildAnalyst() {
-  $("btn-analyze").addEventListener("click", runAnalysis);
-  $("btn-analyst-clear").addEventListener("click", () => {
-    $("analyst-output-text").textContent = "Run an analysis to see results here.";
+  // Prepend "All Locations" option to the location select
+  const locSel = $("analyst-location");
+  const allOpt = document.createElement("option");
+  allOpt.value = "all";
+  allOpt.textContent = "All Locations";
+  locSel.insertBefore(allOpt, locSel.firstChild);
+  locSel.value = "all";
+
+  locSel.addEventListener("change", refreshAnalystLabels);
+
+  $("btn-analyst-clear").addEventListener("click", _clearChat);
+
+  const input  = $("chat-input");
+  const sendBtn = $("btn-chat-send");
+
+  sendBtn.addEventListener("click", _sendChatMessage);
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      _sendChatMessage();
+    }
   });
-  $("analyst-location").addEventListener("change", refreshAnalystLabels);
+  input.addEventListener("input", _resizeChatInput);
+
+  // Fetch backend status once on page load
+  _refreshBackendBadge();
 }
 
-async function runAnalysis() {
-  const location = $("analyst-location").value;
-  const model    = $("analyst-model").value;
-  const btn      = $("btn-analyze");
-  const status   = $("analyst-status");
-  const output   = $("analyst-output-text");
-
-  btn.disabled = true;
-  btn.textContent = "Analyzing…";
-  status.textContent = "Querying Ollama…";
-  output.textContent = "";
-
+// ── Backend status badge ─────────────────────────────────────────────────────
+async function _refreshBackendBadge() {
   try {
-    const res = await apiPost("/api/ai/analyze", { location, model });
-    output.textContent = res.response;
-    status.textContent = "Analysis complete.";
-  } catch (e) {
-    output.textContent = `Error: ${e.message}`;
-    status.textContent = "Analysis failed.";
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Analyze";
+    const s = await apiFetch("/api/ai/status");
+    _updateBackendBadge(s.backend);
+  } catch (_) {
+    _updateBackendBadge("none");
   }
 }
 
+function _updateBackendBadge(backend) {
+  const dot   = $("analyst-backend-dot");
+  const label = $("analyst-backend-label");
+  dot.className   = "backend-dot backend-dot--" + backend;
+  label.textContent = backend === "ollama" ? "Ollama (local)"
+                    : backend === "groq"   ? "Groq (fallback)"
+                    :                        "No backend";
+}
+
+// ── Chat helpers ─────────────────────────────────────────────────────────────
+function _clearChat() {
+  _chatHistory = [];
+  const msgs = $("chat-messages");
+  msgs.innerHTML = "";
+  const welcome = document.createElement("div");
+  welcome.className = "chat-welcome";
+  welcome.id = "chat-welcome";
+  welcome.innerHTML = `
+    <div class="chat-welcome-icon">◈</div>
+    <div class="chat-welcome-title">AURA AI Analyst</div>
+    <div class="chat-welcome-sub">
+      Ask anything about ISS ECLSS sensor data, anomalies, fault analysis, or maintenance
+      status. The AI has read-only access to all live system data across all modules.
+    </div>`;
+  msgs.appendChild(welcome);
+}
+
+function _resizeChatInput() {
+  const el = $("chat-input");
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 120) + "px";
+}
+
+function _appendMessage(role, content) {
+  const welcome = $("chat-welcome");
+  if (welcome) welcome.remove();
+
+  const msgs = $("chat-messages");
+  const wrap = document.createElement("div");
+  wrap.className = `chat-message chat-message--${role}`;
+
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble";
+
+  if (role === "ai") {
+    const avatar = document.createElement("div");
+    avatar.className = "chat-avatar";
+    avatar.textContent = "◈";
+    wrap.appendChild(avatar);
+  }
+
+  const contentEl = document.createElement("div");
+  contentEl.className = "chat-bubble-content";
+  if (content) contentEl.innerHTML = role === "ai" ? _renderMarkdown(content) : _escHtml(content);
+  bubble.appendChild(contentEl);
+  wrap.appendChild(bubble);
+  msgs.appendChild(wrap);
+  msgs.scrollTop = msgs.scrollHeight;
+  return wrap;   // caller can grab contentEl later
+}
+
+// ── Send + stream ────────────────────────────────────────────────────────────
+async function _sendChatMessage() {
+  const input = $("chat-input");
+  const text  = input.value.trim();
+  if (!text || _chatStreaming) return;
+
+  input.value = "";
+  _resizeChatInput();
+
+  _chatHistory.push({ role: "user", content: text });
+  _appendMessage("user", text);
+
+  // AI bubble placeholder
+  const aiWrap    = _appendMessage("ai", "");
+  const contentEl = aiWrap.querySelector(".chat-bubble-content");
+  contentEl.innerHTML = '<span class="chat-typing"><span></span><span></span><span></span></span>';
+
+  _chatStreaming = true;
+  $("btn-chat-send").disabled = true;
+
+  const model = $("analyst-model").value;
+  let aiText  = "";
+  let gotFirstToken = false;
+
+  try {
+    const response = await fetch("/api/ai/chat", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ messages: _chatHistory, model }),
+    });
+
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+
+    const reader  = response.body.getReader();
+    const decoder = new TextDecoder();
+    let   buf     = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();   // keep any incomplete line
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        let evt;
+        try { evt = JSON.parse(line.slice(6)); } catch (_) { continue; }
+
+        if (evt.backend) {
+          _updateBackendBadge(evt.backend);
+        }
+        if (evt.token) {
+          if (!gotFirstToken) {
+            contentEl.innerHTML = "";
+            gotFirstToken = true;
+          }
+          aiText += evt.token;
+          contentEl.innerHTML = _renderMarkdown(aiText);
+          $("chat-messages").scrollTop = $("chat-messages").scrollHeight;
+        }
+        if (evt.error) {
+          contentEl.innerHTML = `<span class="chat-error">Error: ${_escHtml(evt.error)}</span>`;
+        }
+      }
+    }
+
+    if (aiText) {
+      _chatHistory.push({ role: "assistant", content: aiText });
+    }
+  } catch (e) {
+    contentEl.innerHTML = `<span class="chat-error">Error: ${_escHtml(e.message)}</span>`;
+  } finally {
+    _chatStreaming = false;
+    $("btn-chat-send").disabled = false;
+    $("chat-messages").scrollTop = $("chat-messages").scrollHeight;
+  }
+}
+
+// ── Markdown renderer ────────────────────────────────────────────────────────
+function _escHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function _renderMarkdown(text) {
+  // Split on fenced code blocks first so we don't mangle code content.
+  const parts  = [];
+  const codeRe = /```([\w]*)\n?([\s\S]*?)(?:```|$)/g;
+  let last = 0, m;
+  while ((m = codeRe.exec(text)) !== null) {
+    if (m.index > last) parts.push({ t: "text", s: text.slice(last, m.index) });
+    parts.push({ t: "code", s: m[2] });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push({ t: "text", s: text.slice(last) });
+
+  return parts.map(p => {
+    if (p.t === "code") {
+      return `<pre class="chat-code-block"><code>${_escHtml(p.s.trimEnd())}</code></pre>`;
+    }
+    let h = _escHtml(p.s);
+    // Inline code
+    h = h.replace(/`([^`\n]+)`/g, '<code class="chat-inline-code">$1</code>');
+    // Bold / italic
+    h = h.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    h = h.replace(/\*([^*\n]+)\*/g,     "<em>$1</em>");
+    // Headings (### ## #)
+    h = h.replace(/^### (.+)$/gm, '<div class="chat-h3">$1</div>');
+    h = h.replace(/^## (.+)$/gm,  '<div class="chat-h2">$1</div>');
+    h = h.replace(/^# (.+)$/gm,   '<div class="chat-h1">$1</div>');
+    // Unordered lists — group consecutive items into <ul>
+    h = h.replace(/((?:^[-*•] .+(?:\n|$))+)/gm, match => {
+      const items = match.trimEnd().split("\n")
+        .map(l => `<li>${l.replace(/^[-*•] /, "")}</li>`).join("");
+      return `<ul>${items}</ul>`;
+    });
+    // Ordered lists
+    h = h.replace(/((?:^\d+\. .+(?:\n|$))+)/gm, match => {
+      const items = match.trimEnd().split("\n")
+        .map(l => `<li>${l.replace(/^\d+\. /, "")}</li>`).join("");
+      return `<ol>${items}</ol>`;
+    });
+    // Paragraphs
+    h = h.replace(/\n\n+/g, "</p><p>").replace(/\n/g, "<br>");
+    return `<p>${h}</p>`;
+  }).join("");
+}
+
+// ── Live anomaly sidebar ─────────────────────────────────────────────────────
 async function refreshAnalystLabels() {
-  const location = $("analyst-location").value;
+  const loc  = $("analyst-location").value;
   const list = $("analyst-labels-list");
   list.innerHTML = '<div class="loading">Loading…</div>';
 
   try {
+    // If "all" scope, pull from the first location that has data as a sample;
+    // the live WS feed will fill in the rest in real time.
+    const target = loc === "all" ? state.config.locations[0] : loc;
     const readings = await apiFetch(
-      `/api/location/${encodeURIComponent(location)}/readings?n=15`
+      `/api/location/${encodeURIComponent(target)}/readings?n=15`
     );
     list.innerHTML = "";
     if (!readings.length) {
@@ -802,14 +1008,13 @@ async function refreshAnalystLabels() {
 }
 
 function prependAnalystLabelFromReading(r) {
-  const list = $("analyst-labels-list");
+  const list   = $("analyst-labels-list");
   const isAnom = r.if_label === -1;
-  const ts = r.timestamp ? r.timestamp.split("T")[1].split(".")[0] : "—";
+  const ts     = r.timestamp ? r.timestamp.split("T")[1].split(".")[0] : "—";
 
   let rfText = "";
   if (r.rf_classification) {
-    const top = Object.entries(r.rf_classification)
-      .sort((a, b) => b[1] - a[1])[0];
+    const top = Object.entries(r.rf_classification).sort((a, b) => b[1] - a[1])[0];
     if (top) rfText = `${top[0]} (${(top[1] * 100).toFixed(0)}%)`;
   }
 
@@ -825,11 +1030,10 @@ function prependAnalystLabelFromReading(r) {
 }
 
 function prependAnalystLabel(msg) {
-  if ($("analyst-location").value !== msg.location) return;
   prependAnalystLabelFromReading({
-    if_label: msg.if_label,
+    if_label:          msg.if_label,
     rf_classification: msg.rf_classification,
-    timestamp: msg.timestamp,
+    timestamp:         msg.timestamp,
   });
 }
 

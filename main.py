@@ -1,12 +1,13 @@
 import asyncio
 import json
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -618,25 +619,66 @@ def acknowledge_all():
 
 
 # ---------------------------------------------------------------------------
-# AI Analysis
+# AI Chat
 # ---------------------------------------------------------------------------
 
-class AnalysisRequest(BaseModel):
-    location: str
+class ChatRequest(BaseModel):
+    messages: list[dict]   # [{role: "user"|"assistant", content: "..."}]
     model: str = "mistral"
 
 
-@app.post("/api/ai/analyze")
-async def analyze(req: AnalysisRequest):
-    if req.location not in constants.LOCATIONS:
-        raise HTTPException(404, f"Location {req.location!r} not found")
-    readings = db.get_data_for_prompt(req.location, n=10)
-    # Run in thread pool so we don't block the event loop
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None, ai_analyst.analyze, req.location, readings, req.model
+@app.get("/api/ai/status")
+def ai_status():
+    """Return which AI backend is currently active."""
+    backend = ai_analyst.get_backend()
+    return {
+        "backend":          backend,
+        "ollama_available": backend == "ollama",
+        "groq_configured":  bool(os.getenv("GROQ_API_KEY")),
+    }
+
+
+@app.post("/api/ai/chat")
+async def ai_chat(req: ChatRequest):
+    """
+    Stream an AI chat response as Server-Sent Events.
+
+    Each event is a JSON object:
+      {"backend": "ollama"|"groq"|"none"}   — sent once, before tokens
+      {"token": "..."}                       — one per streamed chunk
+      {"done": true}                         — final event
+    """
+    async def generate():
+        loop = asyncio.get_event_loop()
+        token_q: asyncio.Queue = asyncio.Queue()
+
+        def _run():
+            try:
+                backend, gen = ai_analyst.chat_stream(req.messages, req.model, db)
+                loop.call_soon_threadsafe(token_q.put_nowait, {"backend": backend})
+                for token in gen:
+                    loop.call_soon_threadsafe(token_q.put_nowait, {"token": token})
+            except Exception as exc:
+                loop.call_soon_threadsafe(token_q.put_nowait, {"error": str(exc)})
+            finally:
+                loop.call_soon_threadsafe(token_q.put_nowait, {"done": True})
+
+        fut = loop.run_in_executor(None, _run)
+        while True:
+            item = await token_q.get()
+            yield f"data: {json.dumps(item)}\n\n"
+            if item.get("done") or item.get("error"):
+                break
+        await fut
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":    "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
-    return {"location": req.location, "response": result}
 
 
 # ---------------------------------------------------------------------------

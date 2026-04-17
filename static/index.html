@@ -173,11 +173,14 @@
 
   <!-- ── AI ANALYST ───────────────────────────────────────────────── -->
   <section class="page" id="page-analyst">
-    <div class="analyst-layout">
-      <div class="analyst-controls card">
-        <h3>AI Analysis</h3>
+    <div class="chat-layout">
+
+      <!-- Sidebar -->
+      <div class="chat-sidebar card">
+        <div class="chat-sidebar-title">AI Analyst</div>
+
         <div class="control-group">
-          <label>Location</label>
+          <label>Scope</label>
           <select id="analyst-location"></select>
         </div>
         <div class="control-group">
@@ -188,20 +191,52 @@
             <option value="llama3">llama3</option>
           </select>
         </div>
-        <button class="btn btn-primary" id="btn-analyze">Analyze</button>
-        <div class="analyst-status" id="analyst-status"></div>
-      </div>
-      <div class="analyst-output card">
-        <div class="analyst-output-header">
-          <h3>Response</h3>
-          <button class="btn btn-ghost btn-sm" id="btn-analyst-clear">Clear</button>
+
+        <div class="backend-badge" id="analyst-backend-badge">
+          <span class="backend-dot" id="analyst-backend-dot"></span>
+          <span id="analyst-backend-label">Checking…</span>
         </div>
-        <pre id="analyst-output-text" class="analyst-text">Run an analysis to see results here.</pre>
-      </div>
-      <div class="analyst-labels card">
-        <h3>Recent Anomaly Labels</h3>
+
+        <button class="btn btn-ghost btn-sm" id="btn-analyst-clear" style="margin-top:10px;width:100%">
+          Clear Chat
+        </button>
+
+        <div class="sidebar-section-divider"></div>
+        <div class="sidebar-section-label">Live Anomalies</div>
         <div id="analyst-labels-list" class="labels-list"></div>
       </div>
+
+      <!-- Chat main -->
+      <div class="chat-main">
+        <div class="chat-messages" id="chat-messages">
+          <div class="chat-welcome" id="chat-welcome">
+            <div class="chat-welcome-icon">◈</div>
+            <div class="chat-welcome-title">AURA AI Analyst</div>
+            <div class="chat-welcome-sub">
+              Ask anything about ISS ECLSS sensor data, anomalies, fault analysis, or maintenance
+              status. The AI has read-only access to all live system data across all modules.
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-input-row">
+          <textarea
+            id="chat-input"
+            class="chat-textarea"
+            placeholder="Ask about sensor readings, anomalies, fault analysis…"
+            rows="1"
+          ></textarea>
+          <button class="chat-send-btn" id="btn-chat-send" title="Send (Enter)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2.5"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
     </div>
   </section>
 

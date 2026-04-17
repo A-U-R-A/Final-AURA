@@ -1,55 +1,275 @@
-import json
+import os
+import time
+
 import constants
 
+# ---------------------------------------------------------------------------
+# Model mapping: Ollama name → Groq equivalent
+# ---------------------------------------------------------------------------
+GROQ_MODEL_MAP = {
+    "mistral":     "llama-3.3-70b-versatile",
+    "llama3.1:8b": "llama-3.3-70b-versatile",
+    "llama3":      "llama-3.3-70b-versatile",
+}
+GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
-def build_prompt(location_name: str, readings: list) -> str:
-    """Build the LLM analysis prompt from recent readings."""
-    data_json = json.dumps(readings, indent=2, default=str)
-    actions = constants.ACTIONS_TO_TAKE
+# Readings included in the per-turn data snapshot.
+# Ollama (large context) gets more; Groq free tier is token-constrained.
+OLLAMA_READINGS_PER_LOCATION = 10
+GROQ_READINGS_PER_LOCATION   = 3
 
-    return f"""You are an AI system monitoring the ISS Environmental Control and Life Support System (ECLSS).
-You will be given recent sensor readings from a specific module, along with anomaly detection results.
-
-Location: {location_name}
-
-Each reading includes:
-- sensor data (parameter → value pairs)
-- isolation_forest_label: -1 = anomalous, 1 = normal
-- rf_classification: probability distribution over fault types (only provided when anomalous)
-
-Recent sensor data:
-{data_json}
-
-Available remediation actions:
-{json.dumps(actions, indent=2)}
-
-Instructions:
-1. Analyse the sensor trends and anomaly labels.
-2. Identify the most likely fault if one is present.
-3. Recommend the single most appropriate action from the list above.
-4. Keep your explanation concise (3-5 sentences).
-5. End your response with exactly this format on its own line:
-   action: [action name here] location: [{location_name}]
-"""
+# ---------------------------------------------------------------------------
+# Ollama availability cache (re-checked every 60 s)
+# ---------------------------------------------------------------------------
+_ollama_ok: bool | None = None
+_ollama_checked_at: float = 0.0
+_OLLAMA_CHECK_TTL = 60.0
 
 
-def analyze(location_name: str, readings: list, model: str = "mistral") -> str:
-    """
-    Send sensor data to a local Ollama model and return the response text.
-    Returns an error string if Ollama is unavailable.
-    """
+def _is_ollama_available() -> bool:
+    global _ollama_ok, _ollama_checked_at
+    now = time.monotonic()
+    if _ollama_ok is not None and (now - _ollama_checked_at) < _OLLAMA_CHECK_TTL:
+        return _ollama_ok
     try:
         import ollama
-    except ImportError:
-        return "Error: ollama package not installed. Run: pip install ollama"
+        ollama.list()
+        _ollama_ok = True
+    except Exception:
+        _ollama_ok = False
+    _ollama_checked_at = now
+    return _ollama_ok
 
-    if not readings:
-        return "No sensor data available for analysis."
 
-    prompt = build_prompt(location_name, readings)
+def get_backend() -> str:
+    """Return 'ollama', 'groq', or 'none'."""
+    if _is_ollama_available():
+        return "ollama"
+    if os.getenv("GROQ_API_KEY"):
+        return "groq"
+    return "none"
 
-    try:
-        response = ollama.generate(model=model, prompt=prompt)
-        return response.get("response", "No response from model.")
-    except Exception as e:
-        return f"Error communicating with Ollama: {e}\n\nMake sure Ollama is running: ollama serve"
+
+# ---------------------------------------------------------------------------
+# Static system prompt — role + config only, NO raw sensor data.
+# Kept small so it doesn't eat into the per-turn token budget.
+# ---------------------------------------------------------------------------
+
+_STATIC_SYSTEM_PROMPT: str | None = None   # built once and cached
+
+
+def _get_static_system_prompt() -> str:
+    global _STATIC_SYSTEM_PROMPT
+    if _STATIC_SYSTEM_PROMPT is not None:
+        return _STATIC_SYSTEM_PROMPT
+
+    nom  = _compact(constants.PARAMETER_NOMINAL_RANGES)
+    units = _compact(constants.PARAMETER_UNITS)
+    faults = ", ".join(constants.FAULT_IMPACT_SEVERITY.keys())
+    actions = "\n".join(f"  - {a}" for a in constants.ACTIONS_TO_TAKE)
+
+    _STATIC_SYSTEM_PROMPT = f"""You are AURA, an AI embedded in the ISS Environmental Control and Life Support System (ECLSS). You are a knowledgeable, calm, and friendly colleague — not a status report machine.
+
+PERSONALITY:
+- Be conversational and natural. If someone says hello, say hello back. If they ask how you're doing, respond like a person would.
+- Do NOT proactively dump alerts, anomalies, or sensor data unless the user actually asks about them.
+- When you do discuss system data, be focused and specific — answer what was asked, don't enumerate everything you know.
+- You can be concise. Short answers are often better than long ones.
+- You have awareness of the system state at all times, but you don't need to lead every message with it.
+
+READ-ONLY ACCESS: You can observe all sensor data but cannot issue commands, change values, or modify alerts.
+
+REFERENCE DATA (use when relevant to the conversation):
+Nominal ranges: {nom}
+Units: {units}
+Known fault types: {faults}
+Available actions (recommend only):
+{actions}
+
+WHEN DOING ANALYSIS:
+- IF label: -1 = anomalous, 1 = normal. RF gives fault probabilities.
+- Cite specific values and timestamps. Be precise — this is a life-support system.
+- Keep recommendations focused on the exact action from the list above."""
+
+    return _STATIC_SYSTEM_PROMPT
+
+
+def _compact(d: dict) -> str:
+    """Single-line compact representation of a dict, shorter than json.dumps."""
+    return "{" + ", ".join(f"{k}: {v}" for k, v in d.items()) + "}"
+
+
+# ---------------------------------------------------------------------------
+# Per-turn compact snapshot — injected into the current user message only.
+# Uses pipe-separated tables instead of JSON to minimise token count.
+# ---------------------------------------------------------------------------
+
+def _build_snapshot(db, n_readings: int) -> str:
+    lines = ["[BACKGROUND SYSTEM DATA — reference this only if relevant to the user's message]"]
+
+    # ── Location status table ─────────────────────────────────────────────
+    lines.append("LOCATION STATUS:")
+    lines.append("Location | State | Anom/Total | Top Fault (conf)")
+    for loc in constants.LOCATIONS:
+        latest   = db.get_latest_reading(loc)
+        readings = db.get_recent_readings(loc, n=n_readings)
+
+        if_lbl = latest.get("if_label") if latest else None
+        status = "ANOMALOUS" if if_lbl == -1 else "NOMINAL" if if_lbl == 1 else "NO DATA"
+
+        anom  = sum(1 for r in readings if r.get("if_label") == -1)
+        total = len(readings)
+
+        # Aggregate RF votes for top fault
+        fault_votes: dict[str, float] = {}
+        for r in readings:
+            rf = r.get("rf_classification")
+            if rf and r.get("if_label") == -1:
+                top_f, top_p = max(rf.items(), key=lambda x: x[1])
+                fault_votes[top_f] = fault_votes.get(top_f, 0) + float(top_p)
+        if fault_votes:
+            tf = max(fault_votes, key=fault_votes.get)
+            tf_str = f"{tf} ({fault_votes[tf] / max(anom, 1):.2f})"
+        else:
+            tf_str = "—"
+
+        lines.append(f"{loc} | {status} | {anom}/{total} | {tf_str}")
+
+    # ── Recent alerts ─────────────────────────────────────────────────────
+    lines.append("")
+    lines.append("RECENT ALERTS (last 10):")
+    alerts = db.get_alerts(limit=10)
+    if alerts:
+        for a in alerts:
+            ack  = "ACK" if a.get("acknowledged") else "UNACK"
+            ts   = str(a["timestamp"]).split(".")[0]
+            line = f"[{ack}] {ts} | {a['location']} | {a['severity']}"
+            if a.get("fault_type"):
+                line += f" | {a['fault_type']} p={a.get('top_probability', 0):.2f}"
+            lines.append(line)
+    else:
+        lines.append("No recent alerts.")
+
+    # ── Sensor readings (tabular) ─────────────────────────────────────────
+    lines.append("")
+    lines.append(f"SENSOR READINGS (last {n_readings} per location):")
+
+    # Determine the full ordered parameter list from the first available reading
+    params: list[str] = []
+    for loc in constants.LOCATIONS:
+        sample = db.get_latest_reading(loc)
+        if sample and sample.get("data"):
+            params = list(sample["data"].keys())
+            break
+
+    if params:
+        header = "ts | IF | RF_top_fault | " + " | ".join(params)
+        for loc in constants.LOCATIONS:
+            readings = db.get_recent_readings(loc, n=n_readings)
+            if not readings:
+                continue
+            lines.append(f"\n{loc}:")
+            lines.append(header)
+            for r in readings:
+                ts   = str(r.get("timestamp", "")).split(".")[0].split("T")[-1]
+                ifl  = str(r.get("if_label", "?"))
+                rf   = r.get("rf_classification") or {}
+                rf_top = ""
+                if rf:
+                    tf, tp = max(rf.items(), key=lambda x: x[1])
+                    rf_top = f"{tf}:{tp:.2f}"
+                data = r.get("data") or {}
+                vals = " | ".join(
+                    f"{data.get(p, '?'):.3g}" if isinstance(data.get(p), float)
+                    else str(data.get(p, "?"))
+                    for p in params
+                )
+                lines.append(f"{ts} | {ifl} | {rf_top} | {vals}")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Synchronous streaming generators
+# ---------------------------------------------------------------------------
+
+def _stream_ollama(messages: list, model: str):
+    import ollama
+    for chunk in ollama.chat(model=model, messages=messages, stream=True):
+        try:
+            content = chunk.message.content or ""
+        except AttributeError:
+            content = (chunk.get("message", {}).get("content", "")
+                       if isinstance(chunk, dict) else "")
+        if content:
+            yield content
+
+
+def _stream_groq(messages: list, model: str):
+    from groq import Groq
+    groq_model = GROQ_MODEL_MAP.get(model, GROQ_DEFAULT_MODEL)
+    client = Groq(api_key=os.environ["GROQ_API_KEY"])
+    stream = client.chat.completions.create(
+        model=groq_model,
+        messages=messages,
+        stream=True,
+        max_tokens=2048,
+        temperature=0.3,
+    )
+    for chunk in stream:
+        content = chunk.choices[0].delta.content or ""
+        if content:
+            yield content
+
+
+# ---------------------------------------------------------------------------
+# Public interface
+# ---------------------------------------------------------------------------
+
+def chat_stream(messages: list, model: str, db):
+    """
+    Build the message list for the AI backend and return (backend, generator).
+
+    Strategy:
+      - System prompt: static role + config only (~400 tokens, cached).
+      - Data snapshot: compact tabular, injected into the LAST user message
+        only. Previous turns in history are left untouched so token cost
+        doesn't compound across the conversation.
+
+    The generator is synchronous — the caller must run it in a thread pool.
+    """
+    use_ollama = _is_ollama_available()
+    n_readings = OLLAMA_READINGS_PER_LOCATION if use_ollama else GROQ_READINGS_PER_LOCATION
+
+    system_prompt = _get_static_system_prompt()
+    snapshot      = _build_snapshot(db, n_readings=n_readings)
+
+    # Inject snapshot into the last user message only
+    if messages and messages[-1]["role"] == "user":
+        augmented_last = {
+            "role":    "user",
+            "content": f"{snapshot}\n\n---\n{messages[-1]['content']}",
+        }
+        history      = messages[:-1]
+        augmented    = history + [augmented_last]
+    else:
+        # Fallback: append snapshot as a standalone user message
+        augmented = messages + [{"role": "user", "content": snapshot}]
+
+    full_messages = [{"role": "system", "content": system_prompt}] + augmented
+
+    if use_ollama:
+        return "ollama", _stream_ollama(full_messages, model)
+
+    if os.getenv("GROQ_API_KEY"):
+        return "groq", _stream_groq(full_messages, model)
+
+    def _no_backend():
+        yield (
+            "No AI backend is available.\n\n"
+            "**Option 1 — Local Ollama:** run `ollama serve` and ensure a model is pulled "
+            "(e.g. `ollama pull llama3.1:8b`).\n\n"
+            "**Option 2 — Groq fallback:** set the `GROQ_API_KEY` environment variable "
+            "before starting the server."
+        )
+    return "none", _no_backend()
