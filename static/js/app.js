@@ -1624,6 +1624,36 @@ function dismissLatchPopup() {
 const _SETTINGS_TOKEN_KEY = "aura_settings_token";
 let _exportMaxId = null;
 
+const _SETTINGS_DEFAULTS = {
+  // Alerts
+  alert_min_consecutive:   10,
+  alert_cooldown_seconds:  600,
+  alert_critical_rf_gate:  0.85,
+  latch_threshold:         0.95,
+  latch_min_consecutive:   3,
+  dqn_rf_bypass_threshold: 0.92,
+  // Generation
+  tick_interval_seconds:   1,
+  noise_scale:             1.0,
+  crew_event_frequency:    "medium",
+  fault_injection_enabled: true,
+  // Trends
+  mk_p_threshold:          0.01,
+  mk_tau_advisory:         0.35,
+  mk_tau_warning:          0.65,
+  slope_magnitude_gate:    0.05,
+  cusum_threshold:         7.0,
+  cusum_baseline_pct:      0.20,
+  zscore_threshold:        3.5,
+  zscore_single_threshold: 4.5,
+  zscore_window:           30,
+  // Display
+  dashboard_refresh_ms:    30000,
+  chat_max_stored:         40,
+  trends_default_n:        100,
+  detail_default_n:        100,
+};
+
 function _settingsToken()         { return sessionStorage.getItem(_SETTINGS_TOKEN_KEY); }
 function _settingsAuthHeader()    { return { "Authorization": `Bearer ${_settingsToken()}` }; }
 function _settingsClearToken()    { sessionStorage.removeItem(_SETTINGS_TOKEN_KEY); }
@@ -1725,13 +1755,6 @@ function buildSettings() {
       showToast("Alert history cleared", "success");
     } catch (e) { showToast(`Error: ${e.message}`, "error"); }
   });
-  $("btn-clear-faults-settings").addEventListener("click", async () => {
-    try {
-      await _settingsFetch("/api/settings/data/faults", { method: "DELETE" });
-      showToast("Faults cleared", "success");
-      await refreshLocationStates();
-    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
-  });
   $("btn-clear-lstm").addEventListener("click", async () => {
     try {
       await _settingsFetch("/api/settings/data/lstm", { method: "DELETE" });
@@ -1797,6 +1820,17 @@ function buildSettings() {
     } catch (e) { showToast(`Error: ${e.message}`, "error"); }
   });
 
+  $("btn-reset-alerts").addEventListener("click", () => {
+    const d = _SETTINGS_DEFAULTS;
+    $("s-alert-min-consecutive").value = d.alert_min_consecutive;
+    $("s-alert-cooldown").value        = d.alert_cooldown_seconds;
+    $("s-alert-critical-rf").value     = d.alert_critical_rf_gate;
+    $("s-latch-threshold").value       = d.latch_threshold;
+    $("s-latch-min-consec").value      = d.latch_min_consecutive;
+    $("s-dqn-bypass").value            = d.dqn_rf_bypass_threshold;
+    showToast("Alert fields reset to defaults — click Save to apply", "info");
+  });
+
   // Generation settings save
   $("btn-save-generation").addEventListener("click", async () => {
     try {
@@ -1811,6 +1845,15 @@ function buildSettings() {
       });
       showToast("Generation settings saved", "success");
     } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  $("btn-reset-generation").addEventListener("click", () => {
+    const d = _SETTINGS_DEFAULTS;
+    $("s-tick-interval").value      = d.tick_interval_seconds;
+    $("s-noise-scale").value        = d.noise_scale;
+    $("s-crew-freq").value          = d.crew_event_frequency;
+    $("s-fault-injection").checked  = d.fault_injection_enabled;
+    showToast("Generation fields reset to defaults — click Save to apply", "info");
   });
 
   // Trend settings save
@@ -1834,6 +1877,20 @@ function buildSettings() {
     } catch (e) { showToast(`Error: ${e.message}`, "error"); }
   });
 
+  $("btn-reset-trends").addEventListener("click", () => {
+    const d = _SETTINGS_DEFAULTS;
+    $("s-mk-p").value            = d.mk_p_threshold;
+    $("s-mk-tau-advisory").value = d.mk_tau_advisory;
+    $("s-mk-tau-warning").value  = d.mk_tau_warning;
+    $("s-slope-gate").value      = d.slope_magnitude_gate;
+    $("s-cusum-threshold").value = d.cusum_threshold;
+    $("s-cusum-baseline").value  = d.cusum_baseline_pct;
+    $("s-zscore-threshold").value  = d.zscore_threshold;
+    $("s-zscore-single").value     = d.zscore_single_threshold;
+    $("s-zscore-window").value     = d.zscore_window;
+    showToast("Trend fields reset to defaults — click Save to apply", "info");
+  });
+
   // Display settings save
   $("btn-save-display").addEventListener("click", async () => {
     try {
@@ -1849,6 +1906,16 @@ function buildSettings() {
       });
       showToast("Display settings saved", "success");
     } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  $("btn-reset-display").addEventListener("click", () => {
+    const d = _SETTINGS_DEFAULTS;
+    $("s-mission-start").value     = "";
+    $("s-dashboard-refresh").value = d.dashboard_refresh_ms;
+    $("s-chat-max").value          = d.chat_max_stored;
+    $("s-trends-n").value          = d.trends_default_n;
+    $("s-detail-n").value          = d.detail_default_n;
+    showToast("Display fields reset to defaults — click Save to apply", "info");
   });
 
   // Groq key

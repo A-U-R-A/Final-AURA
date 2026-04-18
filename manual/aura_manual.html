@@ -1,0 +1,1694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>AURA — ECLSS Predictive Maintenance · User Manual</title>
+<style>
+/* ── Variables ─────────────────────────────────────────────────── */
+:root {
+  --bg:       #0e0e0e;
+  --surface:  #161616;
+  --surface2: #1e1e1e;
+  --border:   #2a2a2a;
+  --border2:  #383838;
+  --gold:     #aba372;
+  --gold-dim: #4d4933;
+  --warning:  #ffab00;
+  --danger:   #ff3d40;
+  --info:     #c9bc8a;
+  --muted:    #6b6555;
+  --text:     #ddd8cc;
+  --dim:      #8c8470;
+  --white:    #ffffff;
+  --advisory: #c9bc8a;
+  --mono: "Courier New", monospace;
+  --sans: system-ui, "Segoe UI", sans-serif;
+}
+
+/* ── Page / Print ──────────────────────────────────────────────── */
+@page {
+  size: A4;
+  margin: 0;
+  background: #0e0e0e;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html {
+  font-size: 10pt;
+  background: #0e0e0e;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  line-height: 1.65;
+  padding: 0;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* ── Typography ───────────────────────────────────────────────── */
+h1, h2, h3, h4 { font-family: var(--sans); color: var(--white); font-weight: 700; }
+
+h1.section-title {
+  font-size: 22pt;
+  color: var(--gold);
+  border-bottom: 2px solid var(--gold-dim);
+  padding-bottom: 6px;
+  margin-bottom: 18px;
+  margin-top: 0;
+  letter-spacing: 0.5px;
+}
+h2.sub-title {
+  font-size: 14pt;
+  color: var(--white);
+  border-left: 3px solid var(--gold);
+  padding-left: 10px;
+  margin: 22px 0 12px;
+}
+h3.sub-sub {
+  font-size: 11pt;
+  color: var(--gold);
+  margin: 18px 0 8px;
+}
+h4.label {
+  font-size: 9.5pt;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin: 14px 0 6px;
+}
+
+p {
+  margin-bottom: 9px;
+  font-size: 9.5pt;
+  color: var(--text);
+}
+
+a { color: var(--gold); text-decoration: none; }
+
+/* ── Lists ────────────────────────────────────────────────────── */
+ul, ol {
+  margin: 8px 0 10px 20px;
+  font-size: 9.5pt;
+  color: var(--text);
+}
+li { margin-bottom: 4px; }
+ul li::marker { color: var(--gold); }
+
+/* ── Code / Mono ──────────────────────────────────────────────── */
+code {
+  font-family: var(--mono);
+  font-size: 8.5pt;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--info);
+}
+pre {
+  font-family: var(--mono);
+  font-size: 8pt;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 12px 14px;
+  margin: 10px 0;
+  color: var(--info);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Tables ───────────────────────────────────────────────────── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0 16px;
+  font-size: 8.5pt;
+}
+thead tr {
+  background: var(--surface2);
+  border-bottom: 2px solid var(--gold-dim);
+}
+thead th {
+  padding: 7px 10px;
+  text-align: left;
+  color: var(--gold);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-size: 7.5pt;
+}
+tbody tr { border-bottom: 1px solid var(--border); }
+tbody tr:last-child { border-bottom: none; }
+tbody td { padding: 7px 10px; color: var(--text); vertical-align: top; }
+tbody tr:nth-child(even) { background: rgba(255,255,255,.02); }
+
+/* ── Callout boxes ────────────────────────────────────────────── */
+.callout {
+  border-left: 3px solid var(--gold);
+  background: rgba(171,163,114,.07);
+  padding: 10px 14px;
+  margin: 12px 0;
+  border-radius: 0 5px 5px 0;
+  font-size: 9pt;
+}
+.callout.warn {
+  border-left-color: var(--warning);
+  background: rgba(255,171,0,.07);
+}
+.callout.danger {
+  border-left-color: var(--danger);
+  background: rgba(255,61,64,.07);
+}
+.callout strong { color: var(--white); }
+.callout code   { background: rgba(0,0,0,.3); }
+
+/* ── Status pills ─────────────────────────────────────────────── */
+.pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 7.5pt;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.pill.nominal  { background: rgba(171,163,114,.15); color: var(--gold); }
+.pill.advisory { background: rgba(201,188,138,.12); color: var(--advisory); }
+.pill.warning  { background: rgba(255,171,0,.15);   color: var(--warning); }
+.pill.critical { background: rgba(255,61,64,.15);   color: var(--danger); }
+.pill.ok       { background: rgba(0,200,83,.12);    color: #00c853; }
+
+/* ── Definition list ─────────────────────────────────────────── */
+.dlist { margin: 8px 0 14px; }
+.dlist dt {
+  font-family: var(--mono);
+  font-size: 8.5pt;
+  color: var(--gold);
+  font-weight: 700;
+  margin-top: 8px;
+}
+.dlist dd {
+  margin-left: 16px;
+  font-size: 9pt;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+/* ── Page layout ──────────────────────────────────────────────── */
+.page {
+  page-break-before: always;
+  padding: 18mm 16mm 16mm;
+  background: var(--bg);
+  min-height: 297mm;
+}
+.page:first-of-type { page-break-before: avoid; }
+.section-body { /* content container */ }
+
+/* ── Cover page ───────────────────────────────────────────────── */
+.cover {
+  page-break-before: always;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 297mm;
+  background: var(--bg);
+  text-align: center;
+  padding: 40px;
+}
+.cover-logo {
+  font-size: 72pt;
+  font-weight: 900;
+  color: var(--gold);
+  letter-spacing: 8px;
+  line-height: 1;
+  font-family: var(--sans);
+}
+.cover-sub {
+  font-size: 13pt;
+  color: var(--dim);
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  margin-top: 8px;
+  font-family: var(--sans);
+}
+.cover-divider {
+  width: 200px;
+  height: 1px;
+  background: var(--gold-dim);
+  margin: 32px auto;
+}
+.cover-doc-title {
+  font-size: 18pt;
+  color: var(--white);
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.cover-doc-sub {
+  font-size: 10pt;
+  color: var(--dim);
+  max-width: 380px;
+  line-height: 1.7;
+}
+.cover-badge-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 40px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.cover-badge {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 6px 14px;
+  font-size: 8pt;
+  color: var(--dim);
+  font-family: var(--mono);
+}
+.cover-footer {
+  position: absolute;
+  bottom: 28px;
+  font-size: 8pt;
+  color: var(--muted);
+}
+
+/* ── TOC page ─────────────────────────────────────────────────── */
+.toc { }
+.toc-entry {
+  display: flex;
+  align-items: baseline;
+  margin: 6px 0;
+  font-size: 9.5pt;
+  color: var(--text);
+}
+.toc-entry.l2 { padding-left: 18px; font-size: 9pt; color: var(--dim); }
+.toc-entry.l3 { padding-left: 36px; font-size: 8.5pt; color: var(--muted); }
+.toc-num  { min-width: 28px; color: var(--gold); font-family: var(--mono); font-size: 8.5pt; }
+.toc-title { flex: 1; }
+.toc-dots {
+  flex: 1;
+  border-bottom: 1px dotted var(--border2);
+  margin: 0 8px 3px;
+}
+.toc-page { min-width: 24px; text-align: right; font-family: var(--mono); font-size: 8.5pt; color: var(--dim); }
+
+/* ── Two-col layout ───────────────────────────────────────────── */
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin: 10px 0;
+}
+
+/* ── Feature box ──────────────────────────────────────────────── */
+.feature-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 12px 14px;
+}
+.feature-box h4 {
+  color: var(--gold);
+  font-size: 9.5pt;
+  margin-bottom: 6px;
+}
+.feature-box p, .feature-box li {
+  font-size: 8.5pt;
+  color: var(--dim);
+}
+
+/* ── Screen mockup ────────────────────────────────────────────── */
+.mock-bar {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px 4px 0 0;
+  padding: 5px 10px;
+  font-family: var(--mono);
+  font-size: 7.5pt;
+  color: var(--dim);
+  display: flex;
+  gap: 14px;
+  border-bottom: 1px solid var(--border2);
+}
+.mock-bar span.active { color: var(--gold); border-bottom: 1px solid var(--gold); padding-bottom: 2px; }
+.mock-body {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  padding: 10px 12px;
+  font-size: 8pt;
+  color: var(--dim);
+  margin-bottom: 14px;
+}
+
+/* ── Divider ──────────────────────────────────────────────────── */
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 20px 0;
+}
+
+/* ── Grid cards (feature overview) ───────────────────────────── */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 12px 0;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 10px 12px;
+}
+.card-icon { font-size: 16pt; margin-bottom: 4px; }
+.card-title { font-size: 8.5pt; font-weight: 700; color: var(--white); margin-bottom: 3px; }
+.card-desc { font-size: 7.5pt; color: var(--dim); }
+
+/* ── Step list ────────────────────────────────────────────────── */
+.steps { counter-reset: step; list-style: none; margin: 10px 0 14px 0; }
+.steps li {
+  counter-increment: step;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 9pt;
+}
+.steps li::before {
+  content: counter(step);
+  min-width: 22px;
+  height: 22px;
+  background: var(--gold-dim);
+  color: var(--gold);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 8pt;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* ── Fault card ───────────────────────────────────────────────── */
+.fault-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  page-break-inside: avoid;
+}
+.fault-card-name {
+  font-size: 10.5pt;
+  font-weight: 700;
+  color: var(--danger);
+  margin-bottom: 6px;
+}
+.fault-card-row {
+  font-size: 8.5pt;
+  color: var(--dim);
+  margin-bottom: 3px;
+}
+.fault-card-row span { color: var(--text); }
+
+/* Keep together */
+.keep { page-break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     COVER PAGE
+═══════════════════════════════════════════════════════════════ -->
+<div class="cover">
+  <div class="cover-logo">AURA</div>
+  <div class="cover-sub">ECLSS Predictive Maintenance System</div>
+  <div class="cover-divider"></div>
+  <div class="cover-doc-title">User Manual</div>
+  <div class="cover-doc-sub">
+    Complete operational guide covering installation, navigation,
+    all system modules, ML/AI subsystems, settings, and troubleshooting.
+  </div>
+  <div class="cover-badge-row">
+    <div class="cover-badge">FastAPI Backend</div>
+    <div class="cover-badge">PyTorch · LSTM · DQN</div>
+    <div class="cover-badge">scikit-learn · IF · RF</div>
+    <div class="cover-badge">Chart.js · Three.js</div>
+    <div class="cover-badge">SQLite WAL</div>
+    <div class="cover-badge">Ollama · Groq AI</div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TABLE OF CONTENTS
+═══════════════════════════════════════════════════════════════ -->
+<div class="page toc">
+  <h1 class="section-title">Table of Contents</h1>
+
+  <div class="toc-entry"><span class="toc-num">1</span><span class="toc-title">Introduction &amp; Overview</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">1.1</span><span class="toc-title">What is AURA?</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">1.2</span><span class="toc-title">System Capabilities</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">1.3</span><span class="toc-title">Architecture Overview</span><span class="toc-dots"></span></div>
+
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">2</span><span class="toc-title">Installation &amp; Setup</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">2.1</span><span class="toc-title">System Requirements</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">2.2</span><span class="toc-title">Starting on Linux</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">2.3</span><span class="toc-title">Starting on Windows</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">2.4</span><span class="toc-title">First-Run Checklist</span><span class="toc-dots"></span></div>
+
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">3</span><span class="toc-title">Interface Navigation</span><span class="toc-dots"></span></div>
+
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">4</span><span class="toc-title">Digital Twin</span><span class="toc-dots"></span></div>
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">5</span><span class="toc-title">Dashboard</span><span class="toc-dots"></span></div>
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">6</span><span class="toc-title">Sensor Detail</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">6.1</span><span class="toc-title">Overview Grid</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">6.2</span><span class="toc-title">Drilldown View</span><span class="toc-dots"></span></div>
+
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">7</span><span class="toc-title">Trends Analysis</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">7.1</span><span class="toc-title">Statistical Methods</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">7.2</span><span class="toc-title">Severity Levels</span><span class="toc-dots"></span></div>
+
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">8</span><span class="toc-title">Alerts</span><span class="toc-dots"></span></div>
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">9</span><span class="toc-title">AI Analyst</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">9.1</span><span class="toc-title">Ollama (Local)</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">9.2</span><span class="toc-title">Groq (Cloud)</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">9.3</span><span class="toc-title">Chat Memory</span><span class="toc-dots"></span></div>
+
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">10</span><span class="toc-title">Maintenance Schedule</span><span class="toc-dots"></span></div>
+
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">11</span><span class="toc-title">Settings</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">11.1</span><span class="toc-title">Authentication</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">11.2</span><span class="toc-title">Data Management &amp; CSV Export</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">11.3</span><span class="toc-title">Alert Thresholds</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">11.4</span><span class="toc-title">Data Generation</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">11.5</span><span class="toc-title">Fault Management</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">11.6</span><span class="toc-title">ML Models</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">11.7</span><span class="toc-title">Trend Detection</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">11.8</span><span class="toc-title">Integrations</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">11.9</span><span class="toc-title">Display &amp; UI</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">11.10</span><span class="toc-title">Security</span><span class="toc-dots"></span></div>
+
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">12</span><span class="toc-title">Fault Type Reference</span><span class="toc-dots"></span></div>
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">13</span><span class="toc-title">Sensor Parameter Reference</span><span class="toc-dots"></span></div>
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">14</span><span class="toc-title">ML / AI Systems Reference</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">14.1</span><span class="toc-title">Isolation Forest</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">14.2</span><span class="toc-title">Random Forest Classifier</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">14.3</span><span class="toc-title">LSTM Predictor</span><span class="toc-dots"></span></div>
+  <div class="toc-entry l2"><span class="toc-num">14.4</span><span class="toc-title">DQN Recommender</span><span class="toc-dots"></span></div>
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">15</span><span class="toc-title">Troubleshooting</span><span class="toc-dots"></span></div>
+  <div class="toc-entry" style="margin-top:8px"><span class="toc-num">16</span><span class="toc-title">Technical Reference</span><span class="toc-dots"></span></div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     1. INTRODUCTION
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">1 · Introduction &amp; Overview</h1>
+
+  <h2 class="sub-title">1.1 What is AURA?</h2>
+  <p>
+    <strong>AURA</strong> (Autonomous Understanding and Response Architecture) is a real-time predictive maintenance platform
+    purpose-built for the International Space Station's Environmental Control and Life Support System (ECLSS).
+    It combines a physics-based sensor data generator, a four-layer machine learning pipeline, interactive 3D visualization,
+    and a natural-language AI analyst into a single browser-accessible application.
+  </p>
+  <p>
+    AURA monitors seven ISS modules continuously, applies anomaly detection and fault classification to every reading,
+    predicts failure probability and remaining useful life, and recommends remediation actions — all in real time,
+    updating every second.
+  </p>
+
+  <h2 class="sub-title">1.2 System Capabilities</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-icon">⬡</div>
+      <div class="card-title">3D Digital Twin</div>
+      <div class="card-desc">Interactive Three.js model of the ISS. Modules pulse red on anomaly. Click any module to jump to its sensor detail.</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">◈</div>
+      <div class="card-title">4-Layer ML Pipeline</div>
+      <div class="card-desc">Isolation Forest → Random Forest → LSTM predictor → DQN recommender runs on every tick.</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">⟳</div>
+      <div class="card-title">Live Sensor Data</div>
+      <div class="card-desc">Physics-correlated data generator simulates 20 ECLSS parameters per location with configurable noise and fault drift.</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">◐</div>
+      <div class="card-title">Trend Detection</div>
+      <div class="card-desc">Mann-Kendall, CUSUM, and z-score analysis detect slow degradation before IF anomaly threshold is breached.</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">✦</div>
+      <div class="card-title">AI Analyst</div>
+      <div class="card-desc">Chat with a local Ollama or cloud Groq LLM. Full system context injected automatically. Persistent chat memory.</div>
+    </div>
+    <div class="card">
+      <div class="card-icon">⚙</div>
+      <div class="card-title">Secured Settings</div>
+      <div class="card-desc">All thresholds, generation parameters, and integrations are hot-reloadable without server restart. bcrypt auth.</div>
+    </div>
+  </div>
+
+  <h2 class="sub-title">1.3 Architecture Overview</h2>
+  <table>
+    <thead><tr><th>Layer</th><th>Technology</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td>Web Server</td><td>FastAPI + Uvicorn</td><td>REST API, WebSocket live feed, static file serving</td></tr>
+      <tr><td>Database</td><td>SQLite (WAL mode)</td><td>Sensor readings, anomaly labels, alerts, fault state</td></tr>
+      <tr><td>Data Generation</td><td>NumPy + Cholesky noise</td><td>Physics-correlated sensor simulation with fault drift</td></tr>
+      <tr><td>Anomaly Detection</td><td>Isolation Forest (sklearn)</td><td>Flags statistically anomalous readings each tick</td></tr>
+      <tr><td>Fault Classification</td><td>Random Forest (sklearn)</td><td>Classifies fault type and confidence from sensor pattern</td></tr>
+      <tr><td>Failure Prediction</td><td>LSTM + Multi-head Attention (PyTorch)</td><td>Rolling buffer → failure probability + RUL hours</td></tr>
+      <tr><td>Remediation</td><td>DQN (PyTorch)</td><td>Recommends optimal corrective action per location state</td></tr>
+      <tr><td>Trend Analysis</td><td>Mann-Kendall / CUSUM / Z-score (NumPy)</td><td>Detects slow degradation trends before acute anomaly</td></tr>
+      <tr><td>AI Chat</td><td>Ollama (local) / Groq API (cloud)</td><td>NL question answering with full system context injection</td></tr>
+      <tr><td>Frontend</td><td>Vanilla JS + Chart.js + Three.js</td><td>Single-page application, no build step required</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>ISS Locations Monitored:</strong> JLP &amp; JPM · Node 2 · Columbus · US Lab · Cupola · Node 1 · Joint Airlock
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     2. INSTALLATION
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">2 · Installation &amp; Setup</h1>
+
+  <h2 class="sub-title">2.1 System Requirements</h2>
+  <table>
+    <thead><tr><th>Requirement</th><th>Minimum</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Python</td><td>3.10+</td><td>3.12 recommended. Must be accessible as <code>python3</code></td></tr>
+      <tr><td>RAM</td><td>4 GB</td><td>8 GB recommended when LSTM + DQN models are loaded</td></tr>
+      <tr><td>Disk</td><td>500 MB</td><td>Includes Python venv, models, and SQLite database</td></tr>
+      <tr><td>OS</td><td>Linux or Windows 10+</td><td>macOS untested but should work via the Linux script</td></tr>
+      <tr><td>Browser</td><td>Chrome 93+ / Firefox 92+</td><td>WebSocket + ES2020 required. Safari not tested</td></tr>
+      <tr><td>Network</td><td>Local only</td><td>All traffic stays on localhost:8000 by default</td></tr>
+      <tr><td>Ollama (optional)</td><td>Latest</td><td>For local AI Analyst. <code>ollama pull mistral</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>All Python dependencies are listed in <code>requirements.txt</code> and installed automatically by the start scripts:</p>
+  <pre>fastapi==0.115.0    uvicorn[standard]==0.30.6    pydantic==2.9.2
+numpy==2.1.3        scikit-learn>=1.5.2          joblib==1.4.2
+ollama==0.3.3       groq>=0.9.0                  torch>=2.0.0
+bcrypt>=4.0.0       python-jose[cryptography]>=3.3.0
+cryptography>=41.0.0</pre>
+
+  <h2 class="sub-title">2.2 Starting on Linux</h2>
+  <ol class="steps">
+    <li>Open a terminal and navigate to the project root directory.</li>
+    <li>Make the start script executable if needed: <code>chmod +x run/linux/start.sh</code></li>
+    <li>Run the script: <code>bash run/linux/start.sh</code></li>
+    <li>
+      On the <strong>first run</strong>, the script creates a Python virtual environment (<code>.venv/</code>) and installs all
+      dependencies. This may take 2–5 minutes depending on internet speed and whether PyTorch needs to download.
+    </li>
+    <li>Subsequent runs detect if <code>requirements.txt</code> is unchanged (via SHA-256 hash stored in <code>.req_hash</code>)
+      and skip reinstallation — startup takes only 2–4 seconds.</li>
+    <li>Open <strong>http://localhost:8000</strong> in your browser.</li>
+  </ol>
+
+  <div class="callout warn">
+    <strong>Dependency change detection:</strong> If you ever manually add packages to <code>requirements.txt</code>,
+    delete <code>run/linux/.req_hash</code> to force a fresh <code>pip install</code> on next launch.
+  </div>
+
+  <h2 class="sub-title">2.3 Starting on Windows</h2>
+  <ol class="steps">
+    <li>Double-click <code>run\windows\start.bat</code> or run it from a Command Prompt.</li>
+    <li>The script creates <code>.venv\</code> and installs dependencies on the first run (same hash-based skip mechanism as Linux).</li>
+    <li>A browser window opens automatically to <strong>http://localhost:8000</strong>.</li>
+  </ol>
+
+  <h2 class="sub-title">2.4 First-Run Checklist</h2>
+  <ul>
+    <li>The database <code>data/aura.db</code> is created automatically if it does not exist.</li>
+    <li>ML model files are expected in the <code>models/</code> directory. If missing, AURA still starts but the ML pipeline runs in a fallback mode (anomaly detection disabled).</li>
+    <li>The default admin password for Settings is <strong><code>admin</code></strong>. Change it immediately via Settings → Security.</li>
+    <li>For AI Analyst: ensure Ollama is running (<code>ollama serve</code>) and the desired model is pulled (<code>ollama pull mistral</code>). Alternatively, configure a Groq API key in Settings → Integrations.</li>
+    <li>The encryption key for the Groq API key is stored in <code>.fernet.key</code> in the project root. This file is machine-local and should never be committed to version control.</li>
+  </ul>
+
+  <div class="callout danger">
+    <strong>Security note:</strong> AURA is designed for local or trusted-network use. The web server binds to
+    <code>0.0.0.0:8000</code> by default. Do not expose port 8000 to the public internet without adding
+    reverse-proxy authentication.
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     3. INTERFACE NAVIGATION
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">3 · Interface Navigation</h1>
+
+  <p>
+    AURA is a single-page application. All navigation happens through the tab bar at the top of the screen —
+    no page reloads occur and the WebSocket connection is maintained throughout.
+  </p>
+
+  <div class="mock-bar">
+    <span>AURA &nbsp; ECLSS Predictive Maintenance</span>
+    <span style="margin-left:auto;color:#aba372">● NOMINAL &nbsp; ⬤</span>
+  </div>
+  <div class="mock-body" style="padding:0;">
+    <div style="display:flex;gap:0;border-bottom:1px solid #2a2a2a;">
+      <span style="padding:7px 12px;color:#aba372;border-bottom:1px solid #aba372;font-size:8pt">Digital Twin</span>
+      <span style="padding:7px 12px;color:#6b6555;font-size:8pt">Dashboard</span>
+      <span style="padding:7px 12px;color:#6b6555;font-size:8pt">Sensor Detail</span>
+      <span style="padding:7px 12px;color:#6b6555;font-size:8pt">Trends</span>
+      <span style="padding:7px 12px;color:#6b6555;font-size:8pt">Alerts <span style="background:#ff3d40;color:#fff;border-radius:8px;padding:1px 5px;font-size:6.5pt">3</span></span>
+      <span style="padding:7px 12px;color:#6b6555;font-size:8pt">AI Analyst</span>
+      <span style="padding:7px 12px;color:#6b6555;font-size:8pt">Maintenance</span>
+      <span style="padding:7px 12px;color:#6b6555;font-size:8pt">⚙ Settings</span>
+    </div>
+  </div>
+
+  <table class="keep">
+    <thead><tr><th>Tab</th><th>Purpose</th><th>Key Interaction</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Digital Twin</strong></td><td>3D ISS model with live module health indicators</td><td>Click a module → jumps to Sensor Detail for that location</td></tr>
+      <tr><td><strong>Dashboard</strong></td><td>Card-per-location overview with ML status</td><td>Live DQN action + LSTM status badge on every card</td></tr>
+      <tr><td><strong>Sensor Detail</strong></td><td>Mini sparkline grid → full drilldown chart</td><td>Click any sparkline card → 100–1000 point drilldown</td></tr>
+      <tr><td><strong>Trends</strong></td><td>Statistical trend analysis per location</td><td>Select location, click Analyze (auto-refreshes every 30s)</td></tr>
+      <tr><td><strong>Alerts</strong></td><td>Alert history with severity and acknowledgement</td><td>Filter by location, acknowledge individually or bulk</td></tr>
+      <tr><td><strong>AI Analyst</strong></td><td>LLM chat with full system context</td><td>Type questions; history persists across page refreshes</td></tr>
+      <tr><td><strong>Maintenance</strong></td><td>MTBF-based replacement and calibration schedules</td><td>Real-time drift accumulation and urgency status</td></tr>
+      <tr><td><strong>⚙ Settings</strong></td><td>All system configuration behind bcrypt auth</td><td>Login required; all changes hot-reload without restart</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="sub-title">Status Indicators</h2>
+  <p>The top-right corner shows two indicators:</p>
+  <ul>
+    <li><strong>System Status badge</strong> — <span class="pill nominal">● NOMINAL</span> when all locations are healthy; transitions to <span class="pill critical">● ANOMALY</span> if any location has an active anomaly.</li>
+    <li><strong>WebSocket indicator</strong> — green dot = live connection; red/grey = disconnected (auto-reconnects after 3 seconds).</li>
+  </ul>
+  <p>The <strong>Alerts</strong> tab shows a red badge with the count of unacknowledged alerts. This count refreshes every 30 seconds as a fallback in case a WebSocket alert message is missed.</p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     4. DIGITAL TWIN
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">4 · Digital Twin</h1>
+
+  <p>
+    The Digital Twin page renders a real-time Three.js 3D model of the International Space Station.
+    Each module is colored and animated to reflect its current health state as reported by the ML pipeline.
+  </p>
+
+  <h2 class="sub-title">Module Health Visualization</h2>
+  <table class="keep">
+    <thead><tr><th>Module State</th><th>Visual</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill nominal">NOMINAL</span></td><td>Default module color, static</td><td>All sensors within normal range; no active fault</td></tr>
+      <tr><td><span class="pill critical">ANOMALOUS</span></td><td>Module pulses red</td><td>Isolation Forest flagged the latest reading as anomalous</td></tr>
+      <tr><td><span class="pill warning">FAULT LATCHED</span></td><td>Module glows amber</td><td>Random Forest has confirmed a specific fault with high confidence; fault is pinned until manually resolved</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="sub-title">Camera Controls</h2>
+  <ul>
+    <li><strong>Left-click + drag</strong> — orbit the model (rotate view)</li>
+    <li><strong>Scroll wheel</strong> — zoom in/out</li>
+    <li><strong>Right-click + drag</strong> — pan</li>
+    <li><strong>Reset Camera button</strong> — returns to default isometric view (bottom-right of canvas)</li>
+  </ul>
+
+  <h2 class="sub-title">Module Status Sidebar</h2>
+  <p>
+    The right sidebar lists all seven ISS locations with their current status. Each entry shows the location name,
+    whether it is anomalous, and the active injected fault name (if any). The sidebar updates in real time
+    from WebSocket tick messages.
+  </p>
+
+  <h2 class="sub-title">Clicking a Module</h2>
+  <p>
+    Clicking any module in the 3D view automatically selects that location in the Sensor Detail tab's
+    location dropdown and navigates to the Sensor Detail page, showing the overview grid for that module.
+  </p>
+
+  <div class="callout">
+    <strong>Fault Confirmation Popup:</strong> When the Random Forest classifier detects the same fault class
+    at ≥95% confidence for 3 or more consecutive ticks, a modal alert pops up with the fault name, location,
+    and confidence. Click <strong>Acknowledge</strong> to dismiss. The fault remains latched (visible in Dashboard
+    and Digital Twin) until explicitly resolved via Settings → Faults → Resolve.
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     5. DASHBOARD
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">5 · Dashboard</h1>
+
+  <p>
+    The Dashboard displays a card for each of the seven ISS modules, showing a comprehensive snapshot
+    of each module's health, current readings, ML pipeline status, and recommended action.
+    Cards update in real time from WebSocket tick messages.
+  </p>
+
+  <h2 class="sub-title">Location Card Anatomy</h2>
+
+  <div class="mock-body keep" style="border-radius:5px;border:1px solid #2a2a2a;padding:12px;">
+    <div style="font-size:9pt;font-weight:700;color:#fff;margin-bottom:6px">US Lab &nbsp; <span style="background:rgba(171,163,114,.15);color:#aba372;font-size:7pt;padding:2px 7px;border-radius:3px">● NOMINAL</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:7.5pt;color:#8c8470;margin-bottom:8px">
+      <span>O₂ partial pressure <span style="color:#ddd8cc">21.2%</span></span>
+      <span>CO₂ partial pressure <span style="color:#ddd8cc">0.38%</span></span>
+      <span>Temperature <span style="color:#ddd8cc">22.1°C</span></span>
+      <span>Cabin pressure <span style="color:#ddd8cc">14.7 psi</span></span>
+      <span>Humidity <span style="color:#ddd8cc">45%</span></span>
+      <span>Airflow rate <span style="color:#ddd8cc">0.55 m/s</span></span>
+    </div>
+    <div style="display:flex;gap:10px;font-size:7.5pt;border-top:1px solid #2a2a2a;padding-top:8px">
+      <div><span style="color:#8c8470">DQN: </span><span style="color:#aba372;font-weight:700">No Action Needed</span></div>
+      <div style="margin-left:auto"><span style="color:#8c8470">LSTM: </span><span style="color:#aba372;font-weight:700">NOMINAL</span></div>
+    </div>
+  </div>
+
+  <table style="margin-top:14px">
+    <thead><tr><th>Card Element</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Location name + status badge</strong></td><td>NOMINAL or ANOMALOUS based on latest Isolation Forest label</td></tr>
+      <tr><td><strong>Sensor readings grid</strong></td><td>Live values for all 20 ECLSS parameters for that location. Values outside nominal range are highlighted.</td></tr>
+      <tr><td><strong>Latched fault banner</strong></td><td>Appears when the RF classifier has confirmed a fault. Shows fault name and confidence %.</td></tr>
+      <tr><td><strong>DQN action</strong></td><td>Current recommended remediation action from the Deep Q-Network. Updates every tick.</td></tr>
+      <tr><td><strong>LSTM status</strong></td><td>One-word failure probability status: NOMINAL / ELEVATED / WARNING / CRITICAL. Derived from LSTM's failure_prob output.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="sub-title">LSTM Status Words</h2>
+  <table class="keep">
+    <thead><tr><th>Status</th><th>Failure Probability Range</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill nominal">NOMINAL</span></td><td>&lt; 20%</td><td>No imminent failure detected</td></tr>
+      <tr><td><span class="pill advisory">ELEVATED</span></td><td>20%–49%</td><td>Subtle signal; monitor closely</td></tr>
+      <tr><td><span class="pill warning">WARNING</span></td><td>50%–79%</td><td>Significant precursor signal; investigate</td></tr>
+      <tr><td><span class="pill critical">CRITICAL</span></td><td>≥ 80%</td><td>High probability of imminent failure; take action</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="sub-title">Refresh Behavior</h2>
+  <p>
+    Cards are updated continuously via the WebSocket feed. The <strong>Refresh</strong> button in the dashboard header
+    triggers a full re-fetch of all location states from the REST API, useful if the WebSocket was temporarily
+    disconnected.
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     6. SENSOR DETAIL
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">6 · Sensor Detail</h1>
+
+  <p>
+    Sensor Detail provides a two-mode view for deep inspection of individual sensor parameters.
+    Select a location from the dropdown at the top to load its sensor overview grid.
+  </p>
+
+  <h2 class="sub-title">6.1 Overview Grid</h2>
+  <p>
+    The overview grid shows a mini sparkline card for every sensor parameter at the selected location.
+    Each card displays:
+  </p>
+  <ul>
+    <li><strong>Parameter name</strong> — e.g., "O₂ partial pressure"</li>
+    <li><strong>Current value</strong> with unit</li>
+    <li><strong>Mini sparkline chart</strong> — last 50 readings, color-coded: normal points are gold (<code>#aba372</code>), anomalous points are red (<code>#ff3d40</code>)</li>
+    <li><strong>Anomaly indicator</strong> — card border pulses red if the latest reading is anomalous</li>
+  </ul>
+  <p>
+    Live WebSocket ticks push new data points to all visible sparklines in real time, so the overview
+    is always current without requiring manual refresh.
+  </p>
+
+  <h2 class="sub-title">6.2 Drilldown View</h2>
+  <p>
+    Click any mini sparkline card to enter drilldown mode for that parameter. The overview grid is replaced
+    by a full-resolution chart and a data table.
+  </p>
+
+  <h3 class="sub-sub">Drilldown Controls</h3>
+  <table class="keep">
+    <thead><tr><th>Control</th><th>Function</th></tr></thead>
+    <tbody>
+      <tr><td><strong>← Overview</strong> button</td><td>Returns to the overview grid</td></tr>
+      <tr><td><strong>Points dropdown</strong></td><td>Switch between 100 / 200 / 400 / 1000 data points</td></tr>
+      <tr><td><strong>Reload</strong> button</td><td>Fetches the selected number of historical points from the database</td></tr>
+      <tr><td><strong>Live checkbox</strong></td><td>When checked, new WebSocket ticks push the latest reading to the right of the chart in real time (oldest point drops off the left)</td></tr>
+    </tbody>
+  </table>
+
+  <h3 class="sub-sub">Anomaly Highlighting</h3>
+  <p>
+    Data points confirmed as anomalous by the Isolation Forest are rendered as <strong style="color:#ff3d40">red dots</strong>
+    on the chart and as <strong style="color:#ff3d40">red-highlighted rows</strong> in the data table below the chart.
+    Non-anomalous points are rendered in gold. This coloring uses a callback function per point so it cannot
+    drift or shift as new live data arrives.
+  </p>
+
+  <h3 class="sub-sub">Data Table</h3>
+  <p>
+    Below the chart, a scrollable table lists every plotted reading with its timestamp and value.
+    Anomalous rows are highlighted in red. The table is sorted oldest-to-newest (top to bottom).
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     7. TRENDS ANALYSIS
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">7 · Trends Analysis</h1>
+
+  <p>
+    The Trends page applies multi-method statistical analysis to detect gradual degradation trends
+    that may not yet register as anomalies in the Isolation Forest. This gives earlier warning of
+    slow-developing faults (e.g., filter saturation, slow coolant leaks).
+  </p>
+
+  <h2 class="sub-title">Controls</h2>
+  <ul>
+    <li><strong>Location</strong> — select which ISS module to analyze</li>
+    <li><strong>Readings</strong> — number of most recent readings to analyze (60 / 100 / 200)</li>
+    <li><strong>Analyze</strong> button — runs the analysis immediately</li>
+    <li><strong>Auto-refresh (30s)</strong> checkbox — automatically re-runs analysis every 30 seconds</li>
+  </ul>
+
+  <h2 class="sub-title">7.1 Statistical Methods</h2>
+  <p>Every parameter is evaluated against four independent tests simultaneously:</p>
+
+  <div class="dlist">
+    <dt>Mann-Kendall Trend Test</dt>
+    <dd>Non-parametric test for monotonic trend. Computes τ (tau) and p-value. A statistically significant trend
+    (p &lt; threshold, |τ| &gt; advisory threshold) triggers at minimum an Advisory. Higher tau magnitude
+    combined with direction toward a safety boundary escalates to Warning.</dd>
+
+    <dt>Sen's Slope</dt>
+    <dd>Estimates the rate of change per reading in physical units. Acts as a magnitude gate —
+    a statistically significant trend must also show meaningful rate of change (configurable slope gate)
+    to avoid advisories on imperceptibly slow drift.</dd>
+
+    <dt>CUSUM (Cumulative Sum)</dt>
+    <dd>Detects persistent upward or downward shifts by accumulating deviations from a baseline
+    established from the first 15–40 readings. A CUSUM value exceeding the threshold indicates a
+    sustained mean shift. Contributes one "signal" toward multi-signal confirmation.</dd>
+
+    <dt>Rolling Z-Score</dt>
+    <dd>Computes the z-score of the most recent N readings relative to a rolling mean/std window.
+    High z-scores indicate recent values are statistically unusual relative to recent history.
+    Two thresholds: standard (requires 2+ signals) and single-signal (very high z, fires alone).</dd>
+  </div>
+
+  <h2 class="sub-title">7.2 Severity Levels</h2>
+  <table class="keep">
+    <thead><tr><th>Severity</th><th>Condition</th><th>Interpretation</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill nominal">NOMINAL</span></td><td>No test signals fire</td><td>Parameter is stable</td></tr>
+      <tr><td><span class="pill advisory">ADVISORY</span></td><td>MK significant (p &lt; 0.01, |τ| &gt; 0.35) + slope gate + ≥2 total signals</td><td>Slow trend detected; monitor</td></tr>
+      <tr><td><span class="pill warning">WARNING</span></td><td>Advisory conditions met AND trend direction is toward a safety boundary</td><td>Parameter drifting toward out-of-spec; investigate</td></tr>
+      <tr><td><span class="pill critical">CRITICAL</span></td><td>MK highly significant (|τ| &gt; 0.65) + all signals + rapid slope</td><td>Imminent boundary breach; act now</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    Each trend card also displays the <strong>trend direction</strong> (increasing / decreasing / no trend),
+    the <strong>current value</strong> with the nominal range, and the <strong>Sen's slope</strong> rate of change.
+  </p>
+
+  <div class="callout">
+    <strong>Multi-signal requirement:</strong> AURA requires at least two independent test signals to fire before
+    issuing an Advisory. A single elevated z-score reading alone will not trigger an advisory unless it
+    exceeds the single-signal threshold (default 4.5σ). This prevents false alerts from isolated noise spikes.
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     8. ALERTS
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">8 · Alerts</h1>
+
+  <p>
+    The Alerts page shows the historical log of all anomaly alert events. An alert is fired when the
+    Isolation Forest flags a location as anomalous for a configurable number of consecutive ticks
+    (default 10), subject to a cooldown period between repeated alerts for the same location.
+  </p>
+
+  <h2 class="sub-title">Alert Firing Logic</h2>
+  <ol class="steps">
+    <li>Isolation Forest flags a reading as anomalous (label = -1).</li>
+    <li>The consecutive anomaly counter for that location increments.</li>
+    <li>When the counter reaches <strong>Min Consecutive</strong> (default 10), check: has the cooldown period elapsed since the last alert for this location?</li>
+    <li>If yes, fire the alert. Record severity based on Random Forest confidence: ≥ 85% RF confidence → CRITICAL; otherwise WARNING.</li>
+    <li>The counter resets on any nominal reading.</li>
+  </ol>
+
+  <h2 class="sub-title">Alert Severity</h2>
+  <table class="keep">
+    <thead><tr><th>Severity</th><th>Condition</th><th>Color</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill warning">WARNING</span></td><td>Sustained anomaly detected; RF confidence below CRITICAL gate</td><td>Amber</td></tr>
+      <tr><td><span class="pill critical">CRITICAL</span></td><td>Sustained anomaly + RF fault classification ≥ 85% confidence</td><td>Red</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="sub-title">Alert Card Information</h2>
+  <p>Each alert card displays:</p>
+  <ul>
+    <li><strong>Timestamp</strong> — when the alert was fired</li>
+    <li><strong>Location</strong> — which ISS module triggered the alert</li>
+    <li><strong>Severity</strong> — WARNING or CRITICAL</li>
+    <li><strong>Fault type</strong> — the RF-classified fault name (if confidence was sufficient)</li>
+    <li><strong>RF confidence</strong> — probability score of the fault classification</li>
+    <li><strong>Sensor snapshot</strong> — the sensor readings at the time of the alert</li>
+    <li><strong>Acknowledge button</strong> — marks the alert as reviewed</li>
+  </ul>
+
+  <h2 class="sub-title">Filtering</h2>
+  <ul>
+    <li><strong>Unacknowledged only</strong> checkbox — hide alerts that have already been acknowledged</li>
+    <li><strong>Location filter</strong> — limit the list to a specific module</li>
+    <li><strong>Acknowledge All</strong> — bulk-acknowledge all visible alerts</li>
+  </ul>
+
+  <div class="callout">
+    <strong>Alert badge:</strong> The red badge on the Alerts tab in the navigation bar shows the current count
+    of unacknowledged alerts. It refreshes from the WebSocket on every new alert and polls the REST API
+    every 30 seconds as a fallback.
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     9. AI ANALYST
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">9 · AI Analyst</h1>
+
+  <p>
+    The AI Analyst is an LLM-powered chat interface that has read-only access to all live ECLSS data.
+    Before sending each message, AURA injects a full system context block including current sensor
+    readings, anomaly states, active faults, recent alerts, and ML model outputs for all seven locations.
+  </p>
+
+  <h2 class="sub-title">Sidebar Controls</h2>
+  <table class="keep">
+    <thead><tr><th>Control</th><th>Function</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Scope</strong> dropdown</td><td>Focus the AI's context on a specific location or "All Locations"</td></tr>
+      <tr><td><strong>Model</strong> dropdown</td><td>Select which Ollama model to use (mistral, llama3.1:8b, llama3)</td></tr>
+      <tr><td><strong>Backend badge</strong></td><td>Shows whether Ollama (local) or Groq (cloud) is responding, with connection status</td></tr>
+      <tr><td><strong>Clear Chat</strong></td><td>Clears both the visible messages and the browser localStorage history for this session</td></tr>
+      <tr><td><strong>Live Anomalies</strong></td><td>Live list of any currently anomalous parameters across all locations, updated per tick</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="sub-title">9.1 Ollama (Local AI)</h2>
+  <p>
+    When Ollama is running locally (<code>ollama serve</code>), AURA connects to it at
+    <code>http://localhost:11434</code>. Responses are streamed token-by-token and displayed in real time.
+    Recommended models: <strong>mistral</strong> (fast, general purpose), <strong>llama3.1:8b</strong> (higher quality),
+    <strong>llama3</strong> (balanced).
+  </p>
+  <p>
+    Ollama is fully private — no data leaves your machine. Response latency depends on hardware
+    (GPU recommended for models ≥ 7B parameters).
+  </p>
+
+  <h2 class="sub-title">9.2 Groq (Cloud Fallback)</h2>
+  <p>
+    If Ollama is unavailable, AURA automatically falls back to the Groq API (if a key is configured in
+    Settings → Integrations). Groq serves open models (Mixtral, LLaMA) on dedicated hardware with
+    very low latency. Responses are also streamed.
+  </p>
+  <p>
+    Configure the Groq API key in Settings → Integrations → Groq API. The key is stored encrypted
+    on disk using Fernet symmetric encryption.
+  </p>
+
+  <h2 class="sub-title">9.3 Chat Memory</h2>
+  <p>
+    Chat history is persisted to browser <strong>localStorage</strong> so conversations survive page refreshes
+    and tab closes. The AI receives the last N messages (configurable in Settings → Display → Max chat stored)
+    as conversation history, enabling follow-up questions without re-stating context.
+  </p>
+  <p>
+    The <strong>Clear Chat</strong> button wipes both the visible chat and the stored localStorage history.
+  </p>
+
+  <h2 class="sub-title">Example Questions</h2>
+  <ul>
+    <li>"Why is Node 2 showing anomalous readings?"</li>
+    <li>"What is the current CO₂ trend across all modules?"</li>
+    <li>"The LSTM is showing WARNING for US Lab — what should I check?"</li>
+    <li>"Summarize all active alerts and recommend priority actions."</li>
+    <li>"What is the RUL estimate for Joint Airlock and what does the DQN recommend?"</li>
+  </ul>
+
+  <div class="callout">
+    <strong>Context injection:</strong> Every message sent to the AI includes a full system state block.
+    This means the AI always has current data — you do not need to paste readings or describe conditions
+    manually. Simply ask in natural language.
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     10. MAINTENANCE SCHEDULE
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">10 · Maintenance Schedule</h1>
+
+  <p>
+    The Maintenance page provides two evidence-based schedules: a <strong>subsystem replacement schedule</strong>
+    based on observed ISS ECLSS MTBF data, and a <strong>sensor calibration schedule</strong> tracking
+    accumulated drift against calibration thresholds.
+  </p>
+
+  <h2 class="sub-title">Mission Clock</h2>
+  <p>
+    The mission elapsed time counter in the page header shows how long AURA has been running since the
+    configured mission start date (set in Settings → Display → Mission Start). This drives the MTBF
+    life-fraction calculations.
+  </p>
+
+  <h2 class="sub-title">Subsystem Replacement Schedule</h2>
+  <p>
+    Each subsystem card shows:
+  </p>
+  <ul>
+    <li><strong>Subsystem name</strong> and related fault type</li>
+    <li><strong>MTBF</strong> — mean time between failures in hours, sourced from NASA post-flight anomaly reports</li>
+    <li><strong>% Life Used</strong> — mission elapsed hours ÷ MTBF</li>
+    <li><strong>Hours Remaining</strong> to next expected service interval</li>
+    <li><strong>Maintenance type</strong> — calendar-based (replace on schedule) or condition-based (replace when threshold breached)</li>
+    <li><strong>Status badge</strong> — NOMINAL / DUE SOON / OVERDUE based on % life used</li>
+  </ul>
+  <p>MTBF values are calibrated to actual ISS operational experience (e.g., OGS: 3,104 h actual vs. 8,437 h pre-flight estimate).</p>
+
+  <h2 class="sub-title">Sensor Calibration Schedule</h2>
+  <p>
+    The calibration table tracks drift accumulation for sensors with known drift rates (sourced from ICES papers
+    and JSC-62802). Columns:
+  </p>
+  <table class="keep">
+    <thead><tr><th>Column</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>Sensor / Parameter</td><td>Name of the sensor and its parameter</td></tr>
+      <tr><td>Drift Rate</td><td>Fraction of nominal span per week (from calibration literature)</td></tr>
+      <tr><td>Accumulated Drift</td><td>Total drift since last calibration baseline, as % of span</td></tr>
+      <tr><td>Weeks Until Due</td><td>Weeks remaining before accumulated drift exceeds the 2% threshold</td></tr>
+      <tr><td>Status</td><td>OK / DUE SOON / CALIBRATE NOW</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warn">
+    <strong>Note on TCCS:</strong> The Trace Contaminant Control System charcoal bed life is ~19,746 hours (2.25 years).
+    There were no TCCS flight failures in 20+ years of ISS operations. A 90-day sampling cycle does NOT mean
+    90-day replacement — this is a common misconception. AURA uses the corrected MTBF value.
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     11. SETTINGS
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">11 · Settings</h1>
+
+  <p>
+    All system configuration is accessible via the Settings tab. Settings are protected by a bcrypt-hashed
+    admin password. All changes hot-reload into the running server — no restart is required. Settings
+    are persisted to <code>settings.json</code> in the project root.
+  </p>
+
+  <h2 class="sub-title">11.1 Authentication</h2>
+  <p>
+    When navigating to Settings, a login wall is displayed. Enter the admin password and click
+    <strong>Unlock</strong>. A JWT token (30-minute TTL) is issued and stored in
+    <code>sessionStorage</code> — it is automatically cleared when the browser tab is closed.
+  </p>
+  <ul>
+    <li><strong>Default password:</strong> <code>admin</code> — change immediately via Security tab</li>
+    <li><strong>Lock button</strong> — manually invalidates the session token and returns to login wall</li>
+    <li>The token is sent as a <code>Bearer</code> header on every Settings API request</li>
+    <li>If the server is restarted, all tokens are invalidated (new JWT secret generated at startup)</li>
+  </ul>
+
+  <h2 class="sub-title">11.2 Data Management</h2>
+  <p>Destructive data operations, now with watermarked selective export:</p>
+  <table class="keep">
+    <thead><tr><th>Action</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td>Clear Sensor Data</td><td>Deletes all rows from <code>generated_data</code> and <code>anomaly_labels</code>; resets LSTM rolling buffers</td></tr>
+      <tr><td>Clear Alert History</td><td>Deletes all alert records from the <code>alerts</code> table</td></tr>
+      <tr><td>Clear Active Faults</td><td>Clears all injected faults and resets latch/streak counters</td></tr>
+      <tr><td>Clear LSTM Buffers</td><td>Clears LSTM rolling windows; use after sensor recalibration events</td></tr>
+      <tr><td>Export to CSV</td><td>Downloads all sensor data as a CSV file; records a watermark ID for selective clearing</td></tr>
+      <tr><td>Clear Exported Data</td><td>Deletes only rows with ID ≤ watermark (set at export time); rows generated after export began are safe</td></tr>
+    </tbody>
+  </table>
+
+  <h3 class="sub-sub">CSV Export Format</h3>
+  <p>Exported CSV columns:</p>
+  <pre>id, timestamp, location, parameter, value, is_anomalous, rf_prediction, rf_confidence</pre>
+  <p>One row per sensor parameter per tick. A single tick for all 7 locations with 20 parameters each yields up to 140 CSV rows per second of simulation time.</p>
+</div>
+
+<div class="page">
+  <h2 class="sub-title">11.3 Alert Thresholds</h2>
+  <table>
+    <thead><tr><th>Setting</th><th>Default</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>Min consecutive anomalous ticks</td><td>10</td><td>How many consecutive anomalous IF readings before an alert fires. Higher = fewer false positives.</td></tr>
+      <tr><td>Alert cooldown (seconds)</td><td>600</td><td>Minimum time between repeated alerts for the same location. Prevents alert flooding.</td></tr>
+      <tr><td>CRITICAL RF confidence gate</td><td>0.85</td><td>RF confidence must exceed this threshold for an alert to be classified CRITICAL (vs. WARNING).</td></tr>
+      <tr><td>Latch RF confidence threshold</td><td>0.95</td><td>RF confidence must exceed this for a fault classification to "latch" (pin the fault as confirmed).</td></tr>
+      <tr><td>Latch min consecutive ticks</td><td>3</td><td>Number of consecutive high-confidence ticks required before latching a fault.</td></tr>
+      <tr><td>DQN RF bypass threshold</td><td>0.85</td><td>When RF confidence exceeds this, the DQN uses the RF-identified fault directly rather than the sensor state vector.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="sub-title">11.4 Data Generation</h2>
+  <table>
+    <thead><tr><th>Setting</th><th>Default</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>Tick interval (seconds)</td><td>1.0</td><td>How often the data generation loop runs. Lower = more data but higher CPU usage.</td></tr>
+      <tr><td>Noise scale multiplier</td><td>1.0</td><td>Scales all per-sensor noise sigma values. 2.0 = twice the noise; 0.5 = half.</td></tr>
+      <tr><td>Crew event frequency</td><td>medium</td><td>How often transient crew-activity events occur (breathing, exercise, etc.). Affects O₂/CO₂/humidity.</td></tr>
+      <tr><td>Fault injection enabled</td><td>true</td><td>Master switch for fault drift. When off, injected faults have no effect on sensor readings.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="sub-title">11.5 Fault Management</h2>
+  <p>
+    The Faults tab replaces the old twin sidebar controls with a more comprehensive interface:
+  </p>
+  <ul>
+    <li><strong>Active Faults table</strong> — shows the current injected fault (if any) for each of the 7 locations, with a per-row <strong>Resolve</strong> button to clear that location's fault</li>
+    <li><strong>Inject Fault form</strong> — select a location and fault type; a description panel shows the fault's precursor detection window and which sensor parameters it affects; click <strong>Inject Fault</strong> to apply</li>
+    <li><strong>Clear All Injected Faults</strong> — removes all injected faults at once</li>
+  </ul>
+  <div class="callout warn">
+    <strong>Important:</strong> Injecting a fault only starts the drift — the ML pipeline may take several ticks to
+    detect it depending on the fault type and current thresholds. Faults with fast drift rates (e.g., NH₃ Coolant Leak,
+    O₂ Leak) produce anomaly signals within 1–3 minutes. Slow faults (e.g., Water Processor Failure,
+    Trace Contaminant Filter Saturation) may take much longer.
+  </div>
+
+  <h2 class="sub-title">11.6 ML Models</h2>
+  <p>
+    The ML Models tab shows the load status of all four ML components. No configuration is available —
+    this is a diagnostic view only.
+  </p>
+  <table class="keep">
+    <thead><tr><th>Component</th><th>Status Field</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Isolation Forest + Random Forest</td><td>Loaded / Not loaded</td><td>sklearn version displayed; retrain recommended if version mismatch</td></tr>
+      <tr><td>LSTM Predictor</td><td>Loaded / Not loaded</td><td>PyTorch model; requires sufficient data in rolling buffer before producing predictions</td></tr>
+      <tr><td>DQN Recommender</td><td>Loaded / Not loaded</td><td>Deep Q-Network; falls back to rule-based recommendations if not loaded</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="page">
+  <h2 class="sub-title">11.7 Trend Detection Sensitivity</h2>
+  <p>All trend thresholds can be adjusted without restarting the server:</p>
+  <table>
+    <thead><tr><th>Setting</th><th>Default</th><th>Effect of increasing</th></tr></thead>
+    <tbody>
+      <tr><td>Mann-Kendall p-value threshold</td><td>0.01</td><td>Stricter statistical significance required (fewer advisories)</td></tr>
+      <tr><td>MK τ advisory threshold</td><td>0.35</td><td>Stronger trend required for advisory (fewer advisories)</td></tr>
+      <tr><td>MK τ warning threshold</td><td>0.65</td><td>Stronger trend required for warning (fewer warnings)</td></tr>
+      <tr><td>Slope magnitude gate</td><td>0.05</td><td>Larger rate of change required to confirm significance (fewer alerts)</td></tr>
+      <tr><td>CUSUM threshold</td><td>7.0</td><td>Higher cumulative deviation needed before CUSUM signals</td></tr>
+      <tr><td>CUSUM baseline window</td><td>0.20</td><td>Larger fraction of data used as baseline (more stable baseline)</td></tr>
+      <tr><td>Z-score threshold (2-signal)</td><td>3.5</td><td>Higher z-score required for contributing advisory signal</td></tr>
+      <tr><td>Z-score single-signal threshold</td><td>4.5</td><td>Higher z-score required to fire alert on its own</td></tr>
+      <tr><td>Rolling z-score window</td><td>30</td><td>Larger window = smoother baseline = less sensitive to recent changes</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="sub-title">11.8 Integrations</h2>
+  <h3 class="sub-sub">Groq API</h3>
+  <p>
+    Groq provides cloud-hosted inference for open LLMs (Mixtral, LLaMA) with very low latency.
+    AURA uses Groq as a fallback when Ollama is unavailable.
+  </p>
+  <ol class="steps">
+    <li>Create a free account at console.groq.com and generate an API key (format: <code>gsk_…</code>).</li>
+    <li>In Settings → Integrations → Groq API, paste your key and click <strong>Save Key</strong>.</li>
+    <li>Click <strong>Test Connection</strong> to verify the key is valid.</li>
+    <li>The key is stored encrypted on disk using Fernet symmetric encryption. It is never stored in plaintext.</li>
+  </ol>
+
+  <h2 class="sub-title">11.9 Display &amp; UI</h2>
+  <table>
+    <thead><tr><th>Setting</th><th>Default</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>Mission start datetime</td><td>(empty)</td><td>ISO-format start time for the mission clock (e.g., <code>2025-01-01T00:00:00</code>)</td></tr>
+      <tr><td>Dashboard auto-refresh (ms)</td><td>5000</td><td>How often the dashboard polls for updates (in addition to WebSocket push)</td></tr>
+      <tr><td>Max chat messages stored</td><td>50</td><td>Maximum chat messages kept in localStorage for AI context</td></tr>
+      <tr><td>Default trends N readings</td><td>100</td><td>Pre-selected reading count when opening the Trends page</td></tr>
+      <tr><td>Default detail chart N points</td><td>100</td><td>Pre-selected point count when opening a sensor drilldown</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="sub-title">11.10 Security</h2>
+  <h3 class="sub-sub">Change Admin Password</h3>
+  <p>
+    Enter the current password, then the new password twice (minimum 6 characters). Passwords are hashed with
+    bcrypt before storage. The plaintext password is never stored or logged.
+  </p>
+  <h3 class="sub-sub">Revoke All Sessions</h3>
+  <p>
+    Clicking <strong>Revoke All Sessions</strong> generates a new JWT secret on the server.
+    This immediately invalidates every active session token including the current one.
+    You will be automatically logged out and returned to the login wall.
+    Use this if you suspect an unauthorized session is active.
+  </p>
+  <div class="callout warn">
+    <strong>Session storage:</strong> Tokens are stored in <code>sessionStorage</code>, not <code>localStorage</code>.
+    They are automatically cleared when the browser tab is closed. There is no "remember me" option by design.
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     12. FAULT TYPE REFERENCE
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">12 · Fault Type Reference</h1>
+  <p>AURA simulates eight fault types derived from actual ISS ECLSS anomaly data. Each fault injects drift into specific sensor parameters at calibrated rates.</p>
+
+  <div class="fault-card">
+    <div class="fault-card-name">Cabin Leak</div>
+    <div class="fault-card-row">Precursor window: <span>8 hours</span></div>
+    <div class="fault-card-row">Affected parameters: <span>Cabin pressure ↓, N₂ ↓, O₂ partial pressure ↓, CO₂ ↓, Humidity ↓, Temperature ↓, Airflow rate ↑</span></div>
+    <div class="fault-card-row">MTBF: <span>43,800 h (5-year mean)</span></div>
+    <div class="fault-card-row">Remediation: <span>Systematic hatch isolation, ultrasonic leak detection, RTV sealant or fitting replacement</span></div>
+    <div class="fault-card-row">SMAC trigger: <span>Cabin pressure &lt; 14.0 psia or drop rate &gt; 0.05 psia/hr sustained 2h</span></div>
+  </div>
+
+  <div class="fault-card">
+    <div class="fault-card-name">O₂ Generator Failure</div>
+    <div class="fault-card-row">Precursor window: <span>24 hours</span></div>
+    <div class="fault-card-row">Affected parameters: <span>O₂ output rate ↓, O₂ partial pressure ↓, O₂ purity ↓, H₂ (ppm) ↑, Cabin pressure ↓, CO₂ ↑</span></div>
+    <div class="fault-card-row">MTBF: <span>3,104 h actual (pre-flight estimate was 8,437 h — 63% worse than expected)</span></div>
+    <div class="fault-card-row">Remediation: <span>Inspect/replace cell stack; purge gas bubbles from electrolysis cells; check H₂ separator membrane</span></div>
+    <div class="fault-card-row">SMAC trigger: <span>O₂ partial pressure &lt; 19.5% or H₂ &gt; 2% in O₂ stream</span></div>
+  </div>
+
+  <div class="fault-card">
+    <div class="fault-card-name">O₂ Leak</div>
+    <div class="fault-card-row">Precursor window: <span>4 hours</span></div>
+    <div class="fault-card-row">Affected parameters: <span>O₂ partial pressure ↓, Cabin pressure ↓, O₂ (mass spec) ↓, Airflow rate ↑</span></div>
+    <div class="fault-card-row">MTBF: <span>8,760 h (~annual inspection cycle for plumbing seals)</span></div>
+    <div class="fault-card-row">Remediation: <span>Inspect O₂ supply fittings and isolation valve seals; close O₂ isolation valve if leak confirmed</span></div>
+    <div class="fault-card-row">SMAC trigger: <span>O₂ partial pressure &gt; 23.5% or rising trend &gt; 0.5%/hr</span></div>
+  </div>
+
+  <div class="fault-card">
+    <div class="fault-card-name">CO₂ Scrubber Failure</div>
+    <div class="fault-card-row">Precursor window: <span>4 hours</span></div>
+    <div class="fault-card-row">Affected parameters: <span>CO₂ partial pressure ↑, CO₂ (mass spec) ↑, O₂ partial pressure ↓, Temperature ↑</span></div>
+    <div class="fault-card-row">MTBF: <span>4,380 h (~6-month major service per SSP-57003)</span></div>
+    <div class="fault-card-row">Remediation: <span>Replace Zeolite 13X desiccant/sorbent beds; inspect selector valves; check heater elements</span></div>
+    <div class="fault-card-row">SMAC trigger: <span>CO₂ partial pressure &gt; 0.70% (5.3 mmHg); &gt;1.0% is crew health limit</span></div>
+  </div>
+
+  <div class="fault-card">
+    <div class="fault-card-name">CHX Failure (Condensing Heat Exchanger)</div>
+    <div class="fault-card-row">Precursor window: <span>12 hours</span></div>
+    <div class="fault-card-row">Affected parameters: <span>Humidity ↑, Temperature ↑, Bacterial/fungal count ↑, Airflow rate ↓</span></div>
+    <div class="fault-card-row">MTBF: <span>17,520 h (2-year mean; hydrophilic coating degrades over 2–4 years)</span></div>
+    <div class="fault-card-row">Remediation: <span>Inspect and re-apply hydrophilic coating; clean microbial growth; check condensate separator disk</span></div>
+    <div class="fault-card-row">SMAC trigger: <span>Cabin RH &gt; 70% sustained &gt; 48h or temperature &gt; 27°C</span></div>
+  </div>
+
+  <div class="fault-card">
+    <div class="fault-card-name">Water Processor Failure</div>
+    <div class="fault-card-row">Precursor window: <span>48 hours</span></div>
+    <div class="fault-card-row">Affected parameters: <span>Water purity ↓, Production rate ↓, Bacterial/fungal count ↑, H₂O ↓</span></div>
+    <div class="fault-card-row">MTBF: <span>3,850 h actual; sieve beds replaced annually on schedule</span></div>
+    <div class="fault-card-row">Remediation: <span>Replace iodinated resin sieve beds; replace multifiltration beds when TOC &gt; 3 mg/L; inspect ion exchange beds</span></div>
+    <div class="fault-card-row">SMAC trigger: <span>TOCA TOC &gt; 3 mg/L — immediate water processing halt required</span></div>
+  </div>
+
+  <div class="fault-card">
+    <div class="fault-card-name">Trace Contaminant Filter Saturation</div>
+    <div class="fault-card-row">Precursor window: <span>72 hours</span></div>
+    <div class="fault-card-row">Affected parameters: <span>NH₃ ↑↑, CH₄ ↑, CO ↑↑, H₂ (ppm) ↑</span></div>
+    <div class="fault-card-row">MTBF: <span>19,746 h (~2.25 years; no TCCS flight failures in 20+ years of ISS ops)</span></div>
+    <div class="fault-card-row">Remediation: <span>Replace activated charcoal bed and LiOH bed on saturation confirmation; 90-day sampling to track loading</span></div>
+    <div class="fault-card-row">SMAC trigger: <span>NH₃ &gt; 2.6 ppm (180-day SMAC) or any VOC above SMAC-1 limits</span></div>
+  </div>
+
+  <div class="fault-card">
+    <div class="fault-card-name">NH₃ Coolant Leak</div>
+    <div class="fault-card-row">Precursor window: <span>2 hours (fast-developing)</span></div>
+    <div class="fault-card-row">Affected parameters: <span>NH₃ ↑↑↑, Temperature ↑, O₂ ↓, Cabin pressure ↑</span></div>
+    <div class="fault-card-row">MTBF: <span>17,520 h (~2-year mean for major EATCS loop leak events)</span></div>
+    <div class="fault-card-row">Remediation: <span>Inspect pump module fittings and quick-disconnects; replace external pump module (EPM) if leak confirmed</span></div>
+    <div class="fault-card-row">SMAC trigger: <span>NH₃ &gt; 10 ppm requires PPE; &gt; 25 ppm is emergency evacuation threshold</span></div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     13. SENSOR PARAMETER REFERENCE
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">13 · Sensor Parameter Reference</h1>
+  <p>All 20 ECLSS parameters monitored per location, with nominal operating ranges and units from NASA-STD-3001, JSC-20584 SMAC limits, and ISS ECLSS operational data.</p>
+
+  <table>
+    <thead><tr><th>Parameter</th><th>Unit</th><th>Nominal Range</th><th>Subsystem</th><th>Source Standard</th></tr></thead>
+    <tbody>
+      <tr><td>O₂ partial pressure</td><td>%</td><td>19.5 – 23.1</td><td>Atmosphere Revitalization</td><td>NASA-STD-3001 Vol.1 Table 6.2.1</td></tr>
+      <tr><td>CO₂ partial pressure</td><td>%</td><td>0.13 – 0.70</td><td>Atmosphere Revitalization</td><td>SMAC limits (5.3 mmHg caution)</td></tr>
+      <tr><td>Humidity</td><td>%</td><td>25 – 70</td><td>Atmosphere Revitalization</td><td>NASA-STD-3001 max 70% RH</td></tr>
+      <tr><td>O₂ output rate (generator)</td><td>kg/day</td><td>2.0 – 9.0</td><td>Oxygen Generation System</td><td>OGS rated 5.4 kg/day nominal</td></tr>
+      <tr><td>O₂ purity (generator)</td><td>%</td><td>99 – 100</td><td>Oxygen Generation System</td><td>Electrolyzer target &gt;99%</td></tr>
+      <tr><td>Water purity</td><td>mg/L TOC</td><td>0.0 – 3.0</td><td>Water Recovery System</td><td>JSC-62802 potable limit &lt;3 mg/L</td></tr>
+      <tr><td>Production rate (WRS)</td><td>kg/day</td><td>30 – 35</td><td>Water Recovery System</td><td>WPA design capacity</td></tr>
+      <tr><td>Temperature</td><td>°C</td><td>18 – 27</td><td>Temperature &amp; Humidity Control</td><td>NASA-STD-3001 comfort range</td></tr>
+      <tr><td>NH₃</td><td>ppm</td><td>0 – 1</td><td>Trace Contaminant Control</td><td>180-day SMAC = 2.6 ppm; caution at 10 ppm</td></tr>
+      <tr><td>H₂ (%)</td><td>%</td><td>0 – 0.1</td><td>Trace Contaminant Control</td><td>OGS crossover alarm at 2%; LEL at 4%</td></tr>
+      <tr><td>H₂ (ppm)</td><td>ppm</td><td>0 – 10</td><td>Trace Contaminant Control</td><td>MCA dissolved/trace H₂ monitoring</td></tr>
+      <tr><td>CO</td><td>ppm</td><td>0 – 5</td><td>Trace Contaminant Control</td><td>180-day SMAC = 10 ppm; 7-day SMAC = 15 ppm</td></tr>
+      <tr><td>Airflow rate</td><td>m/s</td><td>0.1 – 1.0</td><td>Air Circulation / Ventilation</td><td>IMV/CCAA target 0.1–1.0 m/s</td></tr>
+      <tr><td>Cabin pressure</td><td>psia</td><td>14.0 – 14.9</td><td>Pressure Control</td><td>ISS ops target 14.7 psia</td></tr>
+      <tr><td>Bacterial/fungal count</td><td>CFU/mL</td><td>0 – 50</td><td>Microbial Monitoring</td><td>ISS microbial limit 50 CFU/mL</td></tr>
+      <tr><td>N₂</td><td>%</td><td>75 – 80</td><td>Mass Spectrometer Module</td><td>Balance gas fraction</td></tr>
+      <tr><td>O₂ (mass spec)</td><td>%</td><td>19.5 – 23.5</td><td>Mass Spectrometer Module</td><td>MCA O₂ channel</td></tr>
+      <tr><td>CO₂ (mass spec)</td><td>%</td><td>0.13 – 0.70</td><td>Mass Spectrometer Module</td><td>MCA CO₂ channel</td></tr>
+      <tr><td>CH₄</td><td>ppm</td><td>0 – 10</td><td>Mass Spectrometer Module</td><td>Sabatier byproduct; SMAC-1 = 5300 ppm</td></tr>
+      <tr><td>H₂O (mass spec)</td><td>% RH</td><td>20 – 60</td><td>Mass Spectrometer Module</td><td>MCA humidity channel</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>Correlated noise:</strong> Parameters are not generated independently. AURA uses a Cholesky-decomposed
+    correlation matrix (e.g., O₂ ↔ CO₂: r = −0.82, Temperature ↔ Humidity: r = +0.65) to produce
+    physically realistic cross-parameter noise. This means anomaly detection must handle correlated
+    sensor drift, matching real-world ECLSS behavior.
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     14. ML / AI SYSTEMS REFERENCE
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">14 · ML / AI Systems Reference</h1>
+
+  <h2 class="sub-title">14.1 Isolation Forest (Anomaly Detection)</h2>
+  <p>
+    The Isolation Forest (IF) is trained on nominal sensor data only. It operates on the
+    complete 20-parameter sensor vector for a given location.
+  </p>
+  <ul>
+    <li><strong>Output:</strong> Binary label — <code>+1</code> (nominal) or <code>-1</code> (anomalous)</li>
+    <li><strong>Speed:</strong> Sub-millisecond inference; runs every tick</li>
+    <li><strong>Principle:</strong> Anomalous points are easier to isolate by random feature splits (fewer splits needed)</li>
+    <li><strong>Training:</strong> Fit on clean nominal data; model file: <code>models/isolationForestModel.joblib</code></li>
+    <li><strong>Role in pipeline:</strong> First-stage filter. Does not identify fault type — only flags statistically unusual readings</li>
+  </ul>
+
+  <h2 class="sub-title">14.2 Random Forest Classifier (Fault Classification)</h2>
+  <p>
+    The Random Forest (RF) runs on every tick regardless of the IF label, providing fault
+    classification across all 8 fault types plus a "nominal" class.
+  </p>
+  <ul>
+    <li><strong>Output:</strong> Predicted fault class + confidence probability (0–1)</li>
+    <li><strong>Bypass threshold:</strong> When RF confidence ≥ 0.85, the DQN uses the RF prediction directly rather than the raw state vector</li>
+    <li><strong>Latch logic:</strong> 3+ consecutive ticks at ≥ 95% confidence for the same fault class triggers the fault latch popup</li>
+    <li><strong>Training:</strong> Fit on labeled fault-drift data; model file: <code>models/randomForestModel.joblib</code></li>
+  </ul>
+
+  <h2 class="sub-title">14.3 LSTM Predictor (Failure Probability + RUL)</h2>
+  <p>
+    The LSTM (Long Short-Term Memory) network with multi-head attention processes a rolling window
+    of recent sensor readings to produce two outputs:
+  </p>
+  <div class="two-col">
+    <div class="feature-box">
+      <h4>Failure Probability</h4>
+      <p>Scalar 0–1. The probability of imminent subsystem failure based on recent trends. Maps to NOMINAL / ELEVATED / WARNING / CRITICAL status words displayed on Dashboard cards.</p>
+    </div>
+    <div class="feature-box">
+      <h4>Remaining Useful Life (RUL)</h4>
+      <p>Estimated hours until failure, derived from FAULT_PRECURSOR_HOURS calibration data. Displayed in hours on Dashboard cards. Only meaningful when failure_prob &gt; 0.2.</p>
+    </div>
+  </div>
+  <ul>
+    <li><strong>Rolling buffer:</strong> The LSTM maintains a per-location rolling buffer of the last N sensor readings. Predictions are not issued until the buffer is sufficiently filled.</li>
+    <li><strong>Architecture:</strong> LSTM layers + multi-head attention + fully connected regression head</li>
+    <li><strong>Model file:</strong> <code>models/lstm_predictor.pt</code></li>
+  </ul>
+  <div class="callout warn">
+    <strong>Cold start:</strong> After clearing LSTM buffers or starting fresh, the LSTM will show no predictions
+    until the rolling buffer accumulates enough readings (typically 30–60 ticks). This is expected behavior.
+  </div>
+
+  <h2 class="sub-title">14.4 DQN Recommender (Remediation Actions)</h2>
+  <p>
+    The Deep Q-Network (DQN) maps the current system state to one of 11 possible remediation actions.
+    It is trained via reinforcement learning with a reward structure that prioritizes restoring nominal conditions.
+  </p>
+  <ul>
+    <li><strong>State vector:</strong> Current sensor readings, IF label, RF classification, LSTM failure_prob, and RUL for a location</li>
+    <li><strong>Output:</strong> Action index + confidence. The action name is displayed on each Dashboard card and in the Alerts view.</li>
+    <li><strong>RF bypass:</strong> When RF confidence ≥ DQN bypass threshold, the DQN receives the RF-identified fault as part of its state, improving action specificity</li>
+    <li><strong>Fallback:</strong> If the DQN model is not loaded, a rule-based fallback maps RF fault class directly to the corresponding remediation action</li>
+    <li><strong>Model file:</strong> <code>models/dqn_recommender.pt</code></li>
+  </ul>
+
+  <table class="keep" style="margin-top:12px">
+    <thead><tr><th>Action</th><th>Corresponding Fault</th></tr></thead>
+    <tbody>
+      <tr><td>No Action Needed</td><td>(nominal state)</td></tr>
+      <tr><td>Use Sealant to Close Leak</td><td>Cabin Leak</td></tr>
+      <tr><td>Remove gas bubbles from O₂ generator</td><td>O₂ Generator Failure</td></tr>
+      <tr><td>Close Oxygen Isolation Valve</td><td>O₂ Leak</td></tr>
+      <tr><td>Remove and Replace Air Selector Valves</td><td>CO₂ Scrubber Failure</td></tr>
+      <tr><td>Replace CCAA Heat Exchanger</td><td>CHX Failure</td></tr>
+      <tr><td>Replace MF beds or Ion Exchange Beds</td><td>Water Processor Failure</td></tr>
+      <tr><td>Replace Active Charcoal Bed</td><td>Trace Contaminant Filter Saturation</td></tr>
+      <tr><td>Close Hatch and replace external pump module</td><td>NH₃ Coolant Leak</td></tr>
+      <tr><td>Use Redundant Sensors on Pump</td><td>(sensor validation)</td></tr>
+      <tr><td>Reopen Reference Gas Valve</td><td>(valve state correction)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     15. TROUBLESHOOTING
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">15 · Troubleshooting</h1>
+
+  <table>
+    <thead><tr><th>Symptom</th><th>Likely Cause</th><th>Resolution</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Server fails to start: <code>ModuleNotFoundError</code></td>
+        <td>Package not installed in <code>.venv</code></td>
+        <td>Delete <code>run/linux/.req_hash</code> (or <code>run/windows/.req_hash</code>) and re-run the start script. It will reinstall all packages.</td>
+      </tr>
+      <tr>
+        <td>Settings API returns 422 Unprocessable Entity</td>
+        <td>Route handler missing <code>: Request</code> type annotation</td>
+        <td>All settings route handlers must have <code>request: Request</code> typed parameters. Verify main.py is up to date.</td>
+      </tr>
+      <tr>
+        <td>Sensor Detail shows 404 for Bacterial/fungal count</td>
+        <td>Parameter name contains <code>/</code> which Starlette decodes in path segments</td>
+        <td>Parameter must be passed as a query parameter (<code>?parameter=Bacterial%2Ffungal+count</code>), not a path segment. Verify the API endpoint uses <code>?parameter=</code>.</td>
+      </tr>
+      <tr>
+        <td>Settings forms are blank after login</td>
+        <td>GET /api/settings returning 422 (see above)</td>
+        <td>Fix request type annotations; form pre-population is automatic once the endpoint returns 200.</td>
+      </tr>
+      <tr>
+        <td>AI Analyst shows "No AI backend available"</td>
+        <td>Ollama not running and no Groq key configured</td>
+        <td>Start Ollama (<code>ollama serve</code>) and pull a model (<code>ollama pull mistral</code>), OR configure a Groq API key in Settings → Integrations.</td>
+      </tr>
+      <tr>
+        <td>LSTM shows no predictions (blank)</td>
+        <td>Rolling buffer has not filled yet (cold start)</td>
+        <td>Wait for 30–60 ticks after server start or after clearing LSTM buffers. Normal behavior.</td>
+      </tr>
+      <tr>
+        <td>Trends page shows almost all sensors as Advisory</td>
+        <td>Thresholds too sensitive for current noise level</td>
+        <td>Increase MK τ advisory threshold (e.g., 0.45), slope gate (e.g., 0.08), and z-score threshold (e.g., 4.0) in Settings → Trend Detection.</td>
+      </tr>
+      <tr>
+        <td>WebSocket indicator stays red (disconnected)</td>
+        <td>Server not running, port blocked, or browser restriction</td>
+        <td>Confirm server is running at port 8000. Check firewall. Browser auto-reconnects every 3 seconds.</td>
+      </tr>
+      <tr>
+        <td>Fault injection has no visible effect</td>
+        <td>Fault injection master switch is disabled</td>
+        <td>Settings → Data Generation → Fault injection enabled must be checked. Also confirm the fault was successfully injected (check Active Faults table in Settings → Faults).</td>
+      </tr>
+      <tr>
+        <td>CSV export downloads empty file</td>
+        <td>Database has no sensor data</td>
+        <td>Wait for at least one data generation tick (the background loop runs every 1 second). Check server logs for generation loop errors.</td>
+      </tr>
+      <tr>
+        <td>Admin password forgotten</td>
+        <td>bcrypt hash in settings.json</td>
+        <td>Delete <code>settings.json</code>. On next server restart, <code>settings_manager.py</code> will re-create it with the default password (<code>admin</code>). Note: this also resets all other settings to defaults.</td>
+      </tr>
+      <tr>
+        <td>ML models not loading (red ✗ in Settings → ML Models)</td>
+        <td>Model files missing from <code>models/</code> directory</td>
+        <td>Run the training scripts in <code>scripts/</code> (e.g., <code>python scripts/train_isolation_forest.py</code>). Models are not included in the repository and must be trained locally.</td>
+      </tr>
+      <tr>
+        <td>Groq API key: "Test Connection" fails</td>
+        <td>Invalid key, expired free tier, or network issue</td>
+        <td>Regenerate the key at console.groq.com. Re-save via Settings → Integrations. Check that the server has internet access on port 443.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     16. TECHNICAL REFERENCE
+═══════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h1 class="section-title">16 · Technical Reference</h1>
+
+  <h2 class="sub-title">File Structure</h2>
+  <pre>Final-AURA/
+├── main.py               — FastAPI app, all routes, background loop, auth
+├── database.py           — SQLite persistence layer (WAL mode)
+├── data_generator.py     — Physics-correlated ECLSS sensor simulator
+├── ml_pipeline.py        — Isolation Forest + Random Forest inference
+├── lstm_predictor.py     — LSTM multi-head attention predictor
+├── dqn_recommender.py    — Deep Q-Network remediation recommender
+├── trend_detector.py     — Mann-Kendall / CUSUM / z-score analysis
+├── ai_analyst.py         — Ollama / Groq AI Analyst backend
+├── settings_manager.py   — Persistent settings, bcrypt auth, Fernet encryption
+├── constants.py          — All static configuration (locations, faults, ranges)
+├── requirements.txt      — Python dependencies
+├── settings.json         — Runtime settings (auto-created; do not commit)
+├── .fernet.key           — Encryption key (auto-created; never commit)
+├── data/
+│   └── aura.db           — SQLite database (WAL mode)
+├── models/
+│   ├── isolationForestModel.joblib
+│   ├── randomForestModel.joblib
+│   ├── lstm_predictor.pt
+│   └── dqn_recommender.pt
+├── scripts/
+│   ├── train_isolation_forest.py
+│   ├── train_random_forest.py
+│   ├── train_lstm.py
+│   └── train_dqn.py
+├── static/
+│   ├── index.html
+│   ├── css/style.css
+│   └── js/
+│       ├── app.js        — SPA controller (~2000 lines)
+│       └── twin.js       — Three.js Digital Twin module
+├── run/
+│   ├── linux/start.sh
+│   └── windows/start.bat
+└── manual/
+    └── aura_manual.pdf   — This document</pre>
+
+  <h2 class="sub-title">REST API Endpoints (Key)</h2>
+  <table>
+    <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>GET</td><td><code>/api/config</code></td><td>Static configuration: locations, fault types, parameter ranges, ML status</td></tr>
+      <tr><td>GET</td><td><code>/api/locations</code></td><td>Current anomaly state and active fault for all locations</td></tr>
+      <tr><td>GET</td><td><code>/api/history</code></td><td>Parameter history: <code>?parameter=X&amp;n=100&amp;location=Y</code></td></tr>
+      <tr><td>POST</td><td><code>/api/faults/inject</code></td><td>Inject a fault: <code>{"location": "...", "fault": "..."}</code></td></tr>
+      <tr><td>DELETE</td><td><code>/api/faults</code></td><td>Clear all injected faults</td></tr>
+      <tr><td>DELETE</td><td><code>/api/faults/{location}</code></td><td>Clear fault for a specific location</td></tr>
+      <tr><td>GET</td><td><code>/api/alerts</code></td><td>Alert history with optional filters</td></tr>
+      <tr><td>POST</td><td><code>/api/auth/login</code></td><td>Authenticate: returns JWT token</td></tr>
+      <tr><td>GET</td><td><code>/api/settings</code></td><td>All settings (auth required)</td></tr>
+      <tr><td>PATCH</td><td><code>/api/settings/alerts</code></td><td>Update alert thresholds (auth)</td></tr>
+      <tr><td>PATCH</td><td><code>/api/settings/trends</code></td><td>Update trend detection thresholds (auth)</td></tr>
+      <tr><td>GET</td><td><code>/api/settings/data/export/csv</code></td><td>Stream CSV export (auth); X-Export-Max-Id header</td></tr>
+      <tr><td>DELETE</td><td><code>/api/settings/data/exported</code></td><td>Clear exported rows by watermark (auth)</td></tr>
+      <tr><td>GET</td><td><code>/api/trends/{location}</code></td><td>Run trend analysis for a location</td></tr>
+      <tr><td>GET</td><td><code>/api/maintenance</code></td><td>MTBF and calibration schedule data</td></tr>
+      <tr><td>WS</td><td><code>/ws/live</code></td><td>WebSocket live tick feed</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="sub-title">Database Schema</h2>
+  <pre>faults         (id, fault_name UNIQUE)
+locations      (id, location_name UNIQUE, current_fault_id → faults.id)
+generated_data (id, location_id → locations.id, data TEXT/JSON, timestamp)
+anomaly_labels (id, data_row_id → generated_data.id UNIQUE,
+                isolation_forest_label, random_forest_classification)
+alerts         (id, location_name, timestamp, severity,
+                fault_type, top_probability, sensor_data, acknowledged)</pre>
+
+  <h2 class="sub-title">WebSocket Tick Message Format</h2>
+  <pre>{
+  "type": "tick",
+  "location": "US Lab",
+  "timestamp": "2025-01-01T12:00:00",
+  "data": { "O2 partial pressure": 21.2, "CO2 partial pressure": 0.38, ... },
+  "is_anomalous": false,
+  "rf_classification": { "prediction": "nominal", "confidence": 0.92 },
+  "lstm": { "failure_prob": 0.05, "rul_hours": 240.0 },
+  "dqn": { "action": "No Action Needed", "action_index": 0, "confidence": 0.87 },
+  "latched_fault": null
+}</pre>
+
+  <h2 class="sub-title">Settings Persistence</h2>
+  <p>
+    Settings are stored in <code>settings.json</code> at the project root. On server startup,
+    <code>settings_manager.py</code> loads this file (or creates it from defaults) and applies all
+    values to the running module variables via <code>apply_to_main()</code>, <code>apply_to_dqn()</code>,
+    and <code>apply_to_trend_detector()</code>. No restart is required for threshold changes to take effect.
+    The password bcrypt hash and encrypted Groq key are stored in this file;
+    the Fernet encryption key is in a separate <code>.fernet.key</code> file.
+  </p>
+</div>
+
+</body>
+</html>
