@@ -40,19 +40,26 @@ _ws_clients: Set[WebSocket] = set()
 # catching real sustained faults quickly.
 _alert_last_ts: dict[str, datetime] = {}
 _alert_consec:  dict[str, int]      = {}   # consecutive anomalous tick count
-ALERT_MIN_CONSECUTIVE  = 5    # ticks of sustained anomaly before alerting
-ALERT_COOLDOWN_SECONDS = 300  # min seconds between repeat alerts for same location/fault
+_alert_top_fault: dict[str, str | None] = {}  # top RF fault during current streak
+ALERT_MIN_CONSECUTIVE  = 10   # ticks of sustained anomaly before alerting (↑ from 5)
+ALERT_COOLDOWN_SECONDS = 600  # min seconds between repeat alerts per location (↑ from 300)
 
-# Fault latch: once RF confidence >= LATCH_THRESHOLD the detected fault is pinned
-# for that location and will keep showing even on nominal IF ticks, until the user
-# explicitly resolves it via DELETE /api/faults/latch/{location}.
+# Fault latch: once RF confidence >= LATCH_THRESHOLD for LATCH_MIN_CONSECUTIVE *consecutive*
+# ticks (same fault class each tick) the detected fault is pinned for that location.
+# Pinned display persists even on nominal IF ticks until the user explicitly resolves it.
+# Requiring multiple consecutive high-confidence ticks eliminates single-tick false latches.
 _latched_fault:  dict[str, str] = {}
 _latch_alerted:  set[str]       = set()   # locations that have had their latch alert fired
-LATCH_THRESHOLD = 0.90
+_latch_consec:   dict[str, int] = {}      # consecutive ticks at or above LATCH_THRESHOLD
+_latch_streak:   dict[str, str] = {}      # fault class accumulating toward latch
+LATCH_THRESHOLD     = 0.95   # RF confidence required to count toward latch (↑ from 0.90)
+LATCH_MIN_CONSECUTIVE = 3    # consecutive high-confidence ticks required before latching
 
 
 async def _broadcast(message: dict):
-    """Send a JSON message to all connected WebSocket clients."""
+    """Fan-out a JSON message to all connected WebSocket clients.
+    Any client whose send raises (disconnected, closed) is collected in 'dead'
+    and removed after the loop — avoids modifying the set while iterating."""
     if not _ws_clients:
         return
     data = json.dumps(message, default=str)
@@ -71,8 +78,15 @@ async def _broadcast(message: dict):
 
 async def _generation_loop():
     """
-    Every DATA_GENERATION_INTERVAL seconds, sample all ISS locations,
-    run ML inference, persist to DB, and broadcast via WebSocket.
+    Core real-time loop. Every DATA_GENERATION_INTERVAL seconds:
+      1. Sample all ISS locations from the data generator.
+      2. Run IF + RF inference (MLPipeline.predict).
+      3. Feed the reading to the LSTM rolling buffer; run LSTM prediction.
+      4. Query the DQN for a remediation action recommendation.
+      5. Evaluate the alert debounce state machine (consecutive anomaly counter + cooldown).
+      6. Evaluate the fault latch (pin high-confidence faults until explicitly resolved).
+      7. Persist everything to SQLite.
+      8. Broadcast 'tick' messages (one per location) + a consolidated 'state' message.
     """
     while True:
         try:
@@ -116,21 +130,32 @@ async def _generation_loop():
                     rul_hours=rul_hours,
                 )
 
-                # Alert debounce: increment consecutive counter on anomaly,
-                # reset to 0 on any nominal reading.  Only fire when the
-                # counter hits ALERT_MIN_CONSECUTIVE AND cooldown has elapsed.
-                # P(5 consecutive FPs at 3% FPR) = 0.03^5 ≈ 0.000002 → ~0/day.
+                # ── Alert debounce state machine ──────────────────────────────
+                # Consecutive-anomaly counter resets to 0 on any nominal tick.
+                # On each anomalous tick we also track the top RF fault class.
+                # If the fault class changes mid-streak we reset — a streak where
+                # the RF can't agree on a fault class is likely noise, not a real event.
+                # P(10 consecutive FPs at 3% IF FPR) = 0.03^10 ≈ 6e-17 → ~0/lifetime.
                 is_anomalous = if_label == -1
                 if is_anomalous:
-                    _alert_consec[location] = _alert_consec.get(location, 0) + 1
-                else:
-                    _alert_consec[location] = 0
+                    tick_top_fault = None
+                    if rf_class:
+                        tick_top_fault, _ = max(rf_class.items(), key=lambda x: x[1])
 
-                consec     = _alert_consec.get(location, 0)
-                now_dt     = datetime.fromisoformat(ts)
-                # Cooldown key is per-location so bursts at one location don't
-                # block alerts at another.
-                last_ts    = _alert_last_ts.get(location)
+                    prev_streak_fault = _alert_top_fault.get(location)
+                    if prev_streak_fault is not None and tick_top_fault != prev_streak_fault:
+                        # RF fault class changed — treat as a fresh streak, not continuation
+                        _alert_consec[location] = 1
+                    else:
+                        _alert_consec[location] = _alert_consec.get(location, 0) + 1
+                    _alert_top_fault[location] = tick_top_fault
+                else:
+                    _alert_consec[location]    = 0
+                    _alert_top_fault[location] = None
+
+                consec  = _alert_consec.get(location, 0)
+                now_dt  = datetime.fromisoformat(ts)
+                last_ts = _alert_last_ts.get(location)
                 cooldown_ok = (
                     last_ts is None or
                     (now_dt - last_ts).total_seconds() >= ALERT_COOLDOWN_SECONDS
@@ -141,7 +166,8 @@ async def _generation_loop():
                     if rf_class:
                         top_fault, top_prob = max(rf_class.items(), key=lambda x: x[1])
 
-                    severity = "CRITICAL" if (top_prob or 0) > 0.7 else "WARNING"
+                    # Raise CRITICAL bar to 0.85 — RF regularly hits 70%+ on false positives
+                    severity = "CRITICAL" if (top_prob or 0) > 0.85 else "WARNING"
                     db.insert_alert(
                         location_name=location,
                         timestamp=ts,
@@ -158,23 +184,48 @@ async def _generation_loop():
                         "top_prob":   top_prob,
                         "timestamp":  ts,
                     })
-                    _alert_last_ts[location] = now_dt
-                    _alert_consec[location]  = 0   # reset so next burst is fresh
+                    _alert_last_ts[location]   = now_dt
+                    _alert_consec[location]    = 0   # reset so next burst is a fresh count
+                    _alert_top_fault[location] = None
 
-                # detected_fault: what the AI has actually identified.
-                # The injected fault (active_fault) is kept internal — it only
-                # drives sensor drift in the generator.  The frontend only learns
-                # about a fault once IF flags anomalous AND RF classifies it with
-                # >= 60 % confidence.  This keeps visuals 100 % AI-driven.
-                # Once RF confidence hits LATCH_THRESHOLD (90%), the fault display
-                # is pinned for that location and will not bounce back to nominal
-                # until the user explicitly resolves it.
+                # ── Fault visibility logic ────────────────────────────────────
+                # detected_fault is what the AI reports to the frontend.
+                # active_fault (the injected fault) is internal — it only drives
+                # sensor drift in the generator. The frontend never sees it directly.
+                # Visibility requires BOTH: IF anomalous AND RF >= 60% confidence.
+                # This keeps the display 100% AI-driven (no "oracle" display).
+                #
+                # Latch: once RF confidence hits LATCH_THRESHOLD (90%), pin the fault
+                # display for this location. Even if IF returns nominal on the next tick
+                # (a transient false-negative), the pinned fault keeps showing. The latch
+                # is only cleared when the user clicks "Resolve" (DELETE /api/faults/latch/…).
                 detected_fault = None
                 if if_label == -1 and rf_class:
                     _top_fault, _top_prob = max(rf_class.items(), key=lambda x: x[1])
                     if _top_prob >= 0.60:
                         detected_fault = _top_fault
+
+                    # ── Latch consecutive gate ─────────────────────────────────
+                    # Only advance the latch counter when RF is ≥ LATCH_THRESHOLD
+                    # AND the top fault class is the same as the current streak.
+                    # A single high-confidence tick on a noisy IF false-positive
+                    # will NOT latch — the streak must be consistent across
+                    # LATCH_MIN_CONSECUTIVE ticks before the fault is pinned.
                     if _top_prob >= LATCH_THRESHOLD:
+                        prev_latch_fault = _latch_streak.get(location)
+                        if prev_latch_fault == _top_fault:
+                            _latch_consec[location] = _latch_consec.get(location, 0) + 1
+                        else:
+                            # New fault class — restart the consecutive counter
+                            _latch_consec[location] = 1
+                            _latch_streak[location] = _top_fault
+                    else:
+                        # Fell below threshold — reset latch streak for this location
+                        _latch_consec[location] = 0
+                        _latch_streak.pop(location, None)
+
+                    # Latch only once enough consecutive high-confidence ticks accumulate
+                    if _latch_consec.get(location, 0) >= LATCH_MIN_CONSECUTIVE:
                         newly_latched = location not in _latched_fault
                         _latched_fault[location] = _top_fault
                         if newly_latched and location not in _latch_alerted:
@@ -196,6 +247,10 @@ async def _generation_loop():
                                 "timestamp":  ts,
                                 "latched":    True,
                             })
+                else:
+                    # IF returned nominal — reset the latch streak (no consecutive progress)
+                    _latch_consec.pop(location, None)
+                    _latch_streak.pop(location, None)
 
                 # Honor the latch even when IF returns nominal
                 if detected_fault is None and location in _latched_fault:
@@ -369,8 +424,11 @@ def clear_all_faults():
     lstm.clear_buffer()
     _alert_consec.clear()
     _alert_last_ts.clear()
+    _alert_top_fault.clear()
     _latched_fault.clear()
     _latch_alerted.clear()
+    _latch_consec.clear()
+    _latch_streak.clear()
     return {"status": "ok"}
 
 
@@ -383,8 +441,11 @@ def clear_location_fault(location_name: str):
     lstm.clear_buffer(location_name)
     _alert_consec.pop(location_name, None)
     _alert_last_ts.pop(location_name, None)
+    _alert_top_fault.pop(location_name, None)
     _latched_fault.pop(location_name, None)
     _latch_alerted.discard(location_name)
+    _latch_consec.pop(location_name, None)
+    _latch_streak.pop(location_name, None)
     return {"status": "ok", "location": location_name}
 
 
@@ -397,6 +458,8 @@ def resolve_latched_fault(location_name: str):
         raise HTTPException(404, f"Location {location_name!r} not found")
     _latched_fault.pop(location_name, None)
     _latch_alerted.discard(location_name)
+    _latch_consec.pop(location_name, None)
+    _latch_streak.pop(location_name, None)
     return {"status": "ok", "location": location_name}
 
 
@@ -406,9 +469,12 @@ def clear_data():
     db.clear_alerts()
     generator.reset_drift()
     generator._mission_seconds = 0.0
-    # Also reset alert debounce state so stale consecutive counts don't linger
+    # Reset all alert + latch state so stale counts don't carry over
     _alert_consec.clear()
     _alert_last_ts.clear()
+    _alert_top_fault.clear()
+    _latch_consec.clear()
+    _latch_streak.clear()
     return {"status": "ok", "message": "All sensor data, alerts, and drift state cleared"}
 
 

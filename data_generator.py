@@ -25,7 +25,14 @@ _CIRC_O2   = np.array([1.0, 0.8, 0.7, 0.9, 1.3, 1.1, 1.0, 1.0, 1.1, 1.4, 1.2, 1.
 
 
 def _build_cholesky(params: list) -> np.ndarray:
-    """Build lower-triangular Cholesky factor from PARAMETER_CORRELATION_MATRIX."""
+    """Build lower-triangular Cholesky factor L from PARAMETER_CORRELATION_MATRIX.
+
+    Usage: z @ L.T where z ~ N(0,I) produces correlated noise with the specified
+    Pearson correlations. Called once at generator init; result stored in self._L.
+
+    If the assembled correlation matrix is not positive-definite (can happen with
+    a sparse or inconsistent set of pairwise r values), a small diagonal jitter
+    is added to make it PD before decomposition."""
     n = len(params)
     C = np.eye(n)
     idx = {p: i for i, p in enumerate(params)}
@@ -34,7 +41,8 @@ def _build_cholesky(params: list) -> np.ndarray:
             i, j = idx[p1], idx[p2]
             C[i, j] = r
             C[j, i] = r
-    # Nearest positive-definite matrix (jitter diagonal if needed)
+    # If smallest eigenvalue is near zero, the matrix is not positive-definite.
+    # Shifting the diagonal by |min_eig| + ε guarantees PD and keeps correlations close.
     min_eig = np.linalg.eigvalsh(C).min()
     if min_eig < 1e-6:
         C += np.eye(n) * (abs(min_eig) + 1e-4)
@@ -254,12 +262,18 @@ class SensorDataGenerator:
     # ── Internals ─────────────────────────────────────────────────────────────
 
     def _baseline(self, hour_of_day: float, day_of_mission: float) -> dict:
-        """Generate baseline nominal values with correlated noise + sensor-specific noise + aging."""
-        # Cholesky-correlated standard normal draws (captures cross-parameter correlations)
+        """Generate one set of nominal sensor readings with three noise layers:
+          1. Correlated process noise  — shared physicial fluctuations between sensors (e.g.
+             O2↓ when CO2↑). 1% of nominal span per draw via the pre-built Cholesky factor.
+          2. Independent sensor noise  — each sensor's own measurement uncertainty (from
+             SENSOR_NOISE_SIGMA, fraction of span).
+          3. Long-term drift           — cumulative aging bias and calibration offset that
+             grows slowly over the mission, making the dataset non-stationary over time."""
+        # Correlated process noise: one shared draw → multiply by L.T for cross-param coupling
         z = self.rng.standard_normal(self._n_params)
         corr_z = z @ self._L.T
 
-        # Independent per-sensor noise draw (models each sensor's own noise floor)
+        # Independent sensor noise: drawn separately so each instrument has its own floor
         sensor_z = self.rng.standard_normal(self._n_params)
 
         row = {}
@@ -268,17 +282,17 @@ class SensorDataGenerator:
             center = (lo + hi) / 2.0
             span   = hi - lo
 
-            # Correlated process noise (1% of span) + sensor-specific noise (from SENSOR_NOISE_SIGMA)
             sigma = constants.SENSOR_NOISE_SIGMA.get(p, 0.02)
             val = center + corr_z[j] * 0.01 * span + sensor_z[j] * sigma * span
 
-            # Circadian modulation
+            # Circadian modulation: crew metabolic rhythms shift CO2/O2/temp throughout the day
             val *= self._circadian_factor(p, hour_of_day)
 
-            # Long-term aging drift (wear, not fault)
+            # Nominal aging: gradual component wear over mission duration
             val += constants.NOMINAL_AGING_PER_DAY.get(p, 0.0) * day_of_mission
 
-            # Long-term calibration drift (MCA, galvanic O2 cells, TOCA)
+            # Calibration drift: sensor bias accumulates over weeks (MCA, galvanic O2, TOCA)
+            # Randomised ±20% each tick so drift is noisy rather than perfectly linear
             cal_drift_rate = constants.CALIBRATION_DRIFT_PER_WEEK.get(p, 0.0)
             weeks_elapsed  = day_of_mission / 7.0
             val += cal_drift_rate * span * weeks_elapsed * self.rng.uniform(0.8, 1.2)
@@ -310,11 +324,10 @@ class SensorDataGenerator:
         return 1.0
 
     def _crew_event(self, row: dict, hour: float) -> dict:
-        """Apply a random crew activity spike."""
+        """Apply a random crew activity spike to simulate metabolic or operational events.
+        All deltas are capped at the nominal range ceiling to avoid false anomaly triggers."""
         event = self.rng.choice(["exercise", "meal", "eva_prep"])
         nom = constants.PARAMETER_NOMINAL_RANGES
-
-        phys = constants.PHYSICAL_LIMITS
 
         if event == "exercise":
             # Exercise: crew CO2 output spikes, O2 consumption up, temp and humidity rise
@@ -348,9 +361,12 @@ class SensorDataGenerator:
         return row
 
     def _handle_fault_transition(self, location: str, active_fault: str | None):
+        """Reset accumulated drift whenever the fault changes or clears.
+        Without this reset, leftover drift from a previous fault would contaminate
+        readings for a new fault, producing unrealistic sensor signatures."""
         prev = self._prev_faults.get(location)
         if prev != active_fault:
-            # Fault cleared or changed — reset drift for this location
+            # Fault cleared (→ None) or swapped to a different fault — wipe the drift slate
             if active_fault is None or (prev is not None and active_fault != prev):
                 self._drift[location] = {p: 0.0 for p in self._params}
         self._prev_faults[location] = active_fault

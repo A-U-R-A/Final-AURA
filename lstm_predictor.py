@@ -127,7 +127,8 @@ class LSTMPipeline:
             print(f"[LSTM] Failed to load: {e}")
 
     def push(self, location: str, reading: dict):
-        """Add a new reading to the location's rolling buffer."""
+        """Append a reading to the location's FIFO buffer.
+        Once the buffer exceeds seq_len entries, the oldest reading is dropped (sliding window)."""
         buf = self._buffers.setdefault(location, [])
         buf.append(reading)
         if len(buf) > self.seq_len:
@@ -144,8 +145,18 @@ class LSTMPipeline:
     def predict(self, location: str) -> dict | None:
         """
         Run inference on the current rolling window for a location.
-        Returns {"failure_prob": float, "rul_hours": float} or None if buffer
-        isn't full yet or model is disabled.
+
+        Returns {"failure_prob": float, "rul_hours": float} or None if the buffer
+        isn't full yet (< seq_len readings) or the model is disabled.
+
+        The feature matrix X has shape (seq_len, n_features). Each value is
+        z-scored using the training-set mean and std stored in the checkpoint,
+        which matches the normalisation applied during LSTM training.
+        The +1e-8 epsilon in the divisor prevents division-by-zero for
+        zero-variance features.
+
+        The model forward pass runs under torch.no_grad() to skip gradient
+        tracking — required for inference-only use to avoid memory buildup.
         """
         if not self.enabled:
             return None
@@ -154,14 +165,15 @@ class LSTMPipeline:
             return None
 
         import torch
+        # Z-score normalise each feature using training-set statistics
         X = np.array([
             [(row.get(p, 0.0) - self.scaler_mean[i]) / (self.scaler_std[i] + 1e-8)
              for i, p in enumerate(self.param_order)]
             for row in buf[-self.seq_len:]
-        ], dtype=np.float32)  # (seq_len, features)
+        ], dtype=np.float32)  # (seq_len, n_features)
 
         with torch.no_grad():
-            t = torch.tensor(X).unsqueeze(0)  # (1, seq_len, features)
+            t = torch.tensor(X).unsqueeze(0)  # (1, seq_len, n_features) — batch dim required by LSTM
             fp, rul = self.model(t)
 
         return {

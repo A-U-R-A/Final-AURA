@@ -6,23 +6,27 @@
 "use strict";
 
 // ── State ────────────────────────────────────────────────────────────────────
+// ── Application state ─────────────────────────────────────────────────────────
+// Single source of truth for all UI state. Mutated by WebSocket messages and
+// REST responses; read by render functions whenever the page is refreshed.
 const state = {
-  config: null,
-  locationStates: {},   // {location: {is_anomalous, active_fault}}
-  dqnRecs: {},          // {location: {action, action_index, confidence}}
-  locationData: {},     // {location: {param: value, ...}} latest sensor readings
-  ws: null,
+  config: null,                // /api/config payload (locations, ranges, units, etc.)
+  locationStates: {},          // {location: {is_anomalous, active_fault, latched}}
+  dqnRecs: {},                 // {location: {action, action_index, confidence}} — from WS ticks
+  locationData: {},            // {location: {param: value}} — latest sensor readings
+  ws: null,                    // active WebSocket instance
   wsConnected: false,
-  activePage: "twin",
-  detailChart: null,
-  detailLiveBuffer: [],  // pending live readings for current detail view
-  detailLive: true,
+  activePage: "twin",          // currently visible tab
+  detailChart: null,           // Chart.js instance on the Detail page (destroyed on each load)
+  detailLive: true,            // whether live WS ticks push new points to the detail chart
 };
 
 // ── DOM references ───────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
+// Called once on DOMContentLoaded. Fetches static config then initialises every
+// page section before opening the WebSocket for live data.
 async function boot() {
   try {
     state.config = await apiFetch("/api/config");
@@ -42,10 +46,10 @@ async function boot() {
   buildMaintenance();
   connectWebSocket();
 
-  // Load initial data
+  // Load initial location states before any WS tick arrives
   await refreshLocationStates();
   refreshAlertBadge();
-  // Keep alert badge in sync every 30 s (covers any missed WS alert messages)
+  // Poll alert count every 30 s as a fallback in case a WS alert message is missed
   setInterval(refreshAlertBadge, 30_000);
 }
 
@@ -117,6 +121,9 @@ function populateSelect(id, items) {
 }
 
 // ── WebSocket ────────────────────────────────────────────────────────────────
+// Opens a persistent connection to /ws/live. On disconnect, schedules a
+// reconnection attempt after 3 s. The 25-second keepalive ping prevents idle
+// proxies (e.g. nginx) from closing the connection due to inactivity timeout.
 function connectWebSocket() {
   const wsUrl = `ws://${location.host}/ws/live`;
   state.ws = new WebSocket(wsUrl);
@@ -130,6 +137,7 @@ function connectWebSocket() {
   state.ws.addEventListener("close", () => {
     state.wsConnected = false;
     $("ws-indicator").className = "ws-indicator disconnected";
+    // Auto-reconnect after 3 s — the server sends the current state snapshot on connect
     setTimeout(connectWebSocket, 3000);
   });
 
@@ -145,7 +153,7 @@ function connectWebSocket() {
     } catch (_) {}
   });
 
-  // Keepalive ping every 25s
+  // Keepalive ping every 25 s — avoids idle proxy timeouts
   setInterval(() => {
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
       state.ws.send("ping");
@@ -153,8 +161,14 @@ function connectWebSocket() {
   }, 25000);
 }
 
+// ── WebSocket message router ──────────────────────────────────────────────────
+// Three server-sent message types:
+//   "state"  — full location snapshot (sent once on connect + after each full tick batch)
+//   "alert"  — debounced/latched fault alert (triggers toast + optional latch popup)
+//   "tick"   — per-location per-tick data (sensor values, IF/RF labels, DQN recommendation)
 function handleWsMessage(msg) {
   if (msg.type === "state") {
+    // Replace entire locationStates map and refresh all state-dependent UI
     state.locationStates = msg.locations || {};
     updateSystemStatusBadge();
     updateTwinIndicators();
@@ -165,22 +179,26 @@ function handleWsMessage(msg) {
     const probText  = msg.top_prob ? ` (${(msg.top_prob * 100).toFixed(0)}%)` : "";
     showToast(`⚠ ${msg.severity}: ${faultText}${probText} @ ${msg.location}`, "error");
     refreshAlertBadge();
+    // Latch alerts get a modal popup (and optional alarm) in addition to the toast
     if (msg.latched) {
       showLatchPopup(msg.location, faultText, msg.top_prob || 0);
     }
 
   } else if (msg.type === "tick") {
-    // Cache live sensor data and DQN per location
+    // Cache latest sensor readings and DQN recommendation for this location
     if (msg.data) state.locationData[msg.location] = msg.data;
     if (msg.dqn)  state.dqnRecs[msg.location] = msg.dqn;
-    // Keep locationStates current for active_fault checks in card updates
+    // Merge fault/anomaly state so dashboard cards stay accurate without waiting for "state"
     if (!state.locationStates[msg.location]) state.locationStates[msg.location] = {};
     state.locationStates[msg.location].active_fault = msg.active_fault || null;
     state.locationStates[msg.location].is_anomalous = msg.if_label === -1;
+
+    // Only update dashboard cards in-place when the dashboard is visible — avoids
+    // touching the DOM for pages the user isn't looking at
     if (state.activePage === "dashboard") {
       updateLocationCardInPlace(msg.location, msg.data, msg.dqn, msg.if_label);
     }
-    // Live detail chart update
+    // Push new point to the live-detail chart if the selected location + param match
     if (state.activePage === "detail" && state.detailLive) {
       const loc = $("detail-location").value;
       const param = $("detail-parameter").value;
@@ -188,7 +206,7 @@ function handleWsMessage(msg) {
         pushDetailPoint(msg.timestamp, msg.data[param], msg.if_label === -1);
       }
     }
-    // Live analyst labels update
+    // Prepend to the anomaly labels sidebar in the Analyst page
     if (state.activePage === "analyst") {
       const loc = $("analyst-location").value;
       if (loc === "all" || msg.location === loc) prependAnalystLabel(msg);
@@ -389,6 +407,10 @@ async function refreshDashboard() {
   locations.forEach(loc => grid.appendChild(makeLocationCard(loc)));
 }
 
+// Classify a raw sensor value against its nominal range and return bar/value CSS classes.
+// Three zones: nominal (inside range), warning (outside range but within 10% margin),
+// critical (more than 10% of span outside range). Used by both makeLocationCard and
+// updateLocationCardInPlace to keep styling logic in one place.
 function _sensorBarInfo(raw, range) {
   if (raw === undefined || range === undefined) {
     return { pct: 0, barCls: "bar-empty", valCls: "muted" };
@@ -713,6 +735,11 @@ async function loadDetailChart() {
   });
 }
 
+// Append one live point to the running detail chart and table.
+// Keeps the window size bounded at `detail-n` points by shifting off the oldest.
+// chart.update("none") skips animation so fast ticks don't cause visual jank.
+// The nominal band datasets (datasets[1] and [2]) are flat lines — they repeat
+// the same value so their length stays in sync with the data dataset.
 function pushDetailPoint(timestamp, value, isAnomalous) {
   if (!state.detailChart) return;
   const chart = state.detailChart;
@@ -722,17 +749,18 @@ function pushDetailPoint(timestamp, value, isAnomalous) {
   chart.data.labels.push(label);
   chart.data.datasets[0].data.push(value);
 
-  // Update nominal bands length
+  // Extend nominal band datasets by repeating their constant value
   chart.data.datasets.slice(1).forEach(ds => {
     if (ds && ds.data.length > 0) ds.data.push(ds.data[0]);
   });
 
+  // Slide window: drop oldest point when over limit
   if (chart.data.labels.length > maxPoints) {
     chart.data.labels.shift();
     chart.data.datasets.forEach(ds => ds.data.shift());
   }
 
-  chart.update("none");
+  chart.update("none");   // skip animation for smooth live streaming
 
   // Table row
   const tbody = $("detail-table-body");
@@ -933,6 +961,9 @@ async function _sendChatMessage() {
 }
 
 // ── Markdown renderer ────────────────────────────────────────────────────────
+// Lightweight subset renderer — handles fenced code blocks, inline code,
+// bold/italic, headings (h1-h3), unordered and ordered lists, and paragraphs.
+// Does NOT use a full Markdown library to keep the bundle zero-dependency.
 function _escHtml(s) {
   return String(s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -940,7 +971,7 @@ function _escHtml(s) {
 }
 
 function _renderMarkdown(text) {
-  // Split on fenced code blocks first so we don't mangle code content.
+  // Split on fenced code blocks first so inline Markdown patterns don't corrupt code.
   const parts  = [];
   const codeRe = /```([\w]*)\n?([\s\S]*?)(?:```|$)/g;
   let last = 0, m;
@@ -1038,109 +1069,29 @@ function prependAnalystLabel(msg) {
 }
 
 // ============================================================
-//  DASHBOARD — LSTM PREDICTION BAR
-// ============================================================
-async function refreshPrediction() {
-  const location = $("dashboard-location").value;
-  try {
-    const pred = await apiFetch(`/api/location/${encodeURIComponent(location)}/prediction`);
-    const bar = $("prediction-bar");
-
-    if (!pred.lstm_enabled) {
-      bar.classList.add("hidden");
-      return;
-    }
-
-    bar.classList.remove("hidden");
-
-    if (!pred.ready) {
-      $("pred-failure-prob").textContent = "";
-      $("pred-rul").textContent = "";
-      $("pred-buffer-status").textContent =
-        `Buffer: ${pred.buffer_fill}/${pred.seq_len} (collecting…)`;
-      return;
-    }
-
-    const fp = pred.failure_prob;
-    const fpPct = (fp * 100).toFixed(1);
-    const fpClass = fp < 0.3 ? "pred-fp-nominal" : fp < 0.6 ? "pred-fp-warning" : "pred-fp-critical";
-    $("pred-failure-prob").className = fpClass;
-    $("pred-failure-prob").textContent = `Failure prob: ${fpPct}%`;
-    $("pred-rul").className = "pred-rul";
-    $("pred-rul").textContent = `RUL: ${pred.rul_hours.toFixed(1)} h`;
-    $("pred-buffer-status").textContent = "";
-  } catch (_) {}
-}
-
-// ============================================================
-//  DASHBOARD — DQN RECOMMENDATION BAR
-// ============================================================
-async function refreshRecommendation() {
-  const location = $("dashboard-location").value;
-
-  // Use cached value from WebSocket if available
-  if (state.dqnRecs[location]) {
-    updateDqnBar(state.dqnRecs[location], location);
-    return;
-  }
-
-  // Fall back to REST endpoint (e.g. on first load before any tick arrives)
-  try {
-    const rec = await apiFetch(
-      `/api/location/${encodeURIComponent(location)}/recommendation`
-    );
-    if (rec.dqn_enabled && rec.ready) {
-      state.dqnRecs[location] = rec;
-      updateDqnBar(rec, location);
-    }
-  } catch (_) {}
-}
-
-function updateDqnBar(rec, location) {
-  const bar = $("dqn-bar");
-  if (!rec) { bar.classList.add("hidden"); return; }
-
-  bar.classList.remove("hidden");
-
-  const isDoNothing = rec.action_index === 0;
-  const conf        = (rec.confidence * 100).toFixed(0);
-
-  const actionEl = $("dqn-action");
-  actionEl.textContent = rec.action;
-
-  if (isDoNothing) {
-    actionEl.className = "dqn-action-nominal";
-  } else if (rec.confidence >= 0.7) {
-    actionEl.className = "dqn-action-critical";
-  } else {
-    actionEl.className = "dqn-action-warning";
-  }
-
-  $("dqn-confidence").textContent = `${conf}% confidence`;
-  $("dqn-location").textContent   = location ? `@ ${location}` : "";
-}
-
-// ============================================================
 //  TRENDS PAGE
 // ============================================================
+// ── Trends auto-refresh timer ─────────────────────────────────────────────────
+// Managed entirely by the auto-refresh checkbox. Only one timer runs at a time.
+// Without this discipline, enabling the checkbox while the page timer was already
+// running would create a second 30-second interval causing double refreshes.
 let _trendsAutoTimer = null;
 
 function buildTrends() {
   $("btn-trends-load").addEventListener("click", refreshTrends);
+
+  // Refresh immediately when location changes (only if auto-refresh is on)
   $("trends-location").addEventListener("change", () => {
     if ($("trends-auto").checked) refreshTrends();
   });
+
+  // Toggle the single shared timer on checkbox change
   $("trends-auto").addEventListener("change", e => {
+    clearInterval(_trendsAutoTimer);   // always clear first to avoid duplicates
     if (e.target.checked) {
       _trendsAutoTimer = setInterval(refreshTrends, 30000);
-    } else {
-      clearInterval(_trendsAutoTimer);
     }
   });
-  // Start auto-refresh timer
-  _trendsAutoTimer = setInterval(() => {
-    if (state.activePage === "trends") refreshTrends();
-  }, 30000);
 }
 
 async function refreshTrends() {
@@ -1407,8 +1358,9 @@ function showToast(msg, type = "info") {
 // ============================================================
 //  LATCH ALERT POPUP & ALARM
 // ============================================================
-
-// Set to true to enable the alarm sound when a fault is latched.
+// Shown when the backend broadcasts a "latched" alert (RF confidence >= 90%).
+// The popup blocks the UI until dismissed; the optional Web Audio klaxon provides
+// an audible warning. Set ALARM_SOUND_ENABLED = true to activate the sound.
 const ALARM_SOUND_ENABLED = false;
 
 let _alarmCtx = null;

@@ -1,14 +1,15 @@
 ### Data Generation ###
+# How often the background loop samples all ISS locations and runs ML inference.
 DATA_GENERATION_INTERVAL = 1  # seconds between ticks
-DEFAULT_DATA_POINT_AMOUNT = 50
-DATA_ROWS_IN_QUEUE = 5_000
 
 ### Paths ###
+# Relative paths used at server startup to locate the SQLite DB and trained models.
 DATABASE_PATH = "data/aura.db"
 IF_MODEL_PATH = "models/isolationForestModel.joblib"
 RF_MODEL_PATH = "models/randomForestModel.joblib"
 
 ### ISS Locations ###
+# Canonical location names — used as keys in DB, WebSocket messages, and API responses.
 LOCATIONS = [
     "JLP & JPM",
     "Node 2",
@@ -19,7 +20,8 @@ LOCATIONS = [
     "Joint Airlock",
 ]
 
-# Pixel positions within the digital twin SVG display area (approx 900x700)
+# Pixel positions for the 2D schematic overlay (approx 900×700 canvas).
+# Sent to the frontend via /api/config; not used by the Three.js twin (which has its own MODULE_POS).
 LOCATION_POSITIONS = {
     "JLP & JPM":      (118, 211),
     "Node 2":         (492, 263),
@@ -31,6 +33,8 @@ LOCATION_POSITIONS = {
 }
 
 ### Subsystem → Parameter mapping ###
+# Groups sensor parameters by their physical ECLSS subsystem.
+# Drives the Subsystems panel in the frontend and the /api/subsystems endpoint.
 SUBSYSTEM_PARAMETERS = {
     "Atmosphere Revitalization System": [
         "O2 partial pressure",
@@ -73,6 +77,8 @@ SUBSYSTEM_PARAMETERS = {
 }
 
 ### Physical limits (hard clamps) ###
+# Absolute sensor value boundaries — applied in data_generator.py after fault drift to prevent
+# physically impossible readings (e.g. negative pressure, O2 fraction > 100%).
 PHYSICAL_LIMITS = {
     "O2 partial pressure":                  (0.0, 100.0),
     "CO2 partial pressure":                 (0.0, 10.0),
@@ -97,6 +103,9 @@ PHYSICAL_LIMITS = {
 }
 
 ### Nominal operating ranges ###
+# (lo, hi) tuples defining the healthy operating envelope for each parameter.
+# Used by: data_generator (baseline centering), MLPipeline (IF feature vector),
+#           trend_detector (severity classification), frontend chart bands.
 # Sources: NASA-STD-3001, JSC-20584 SMAC limits, ISS ECLSS operational data
 PARAMETER_NOMINAL_RANGES = {
     "O2 partial pressure":                  (19.5, 23.1),   # % vol (NASA-STD-3001 Vol.1 Table 6.2.1: 19.5-23.1% O2 by volume; ~2.87-3.40 psia at 14.7 psia total)
@@ -122,6 +131,7 @@ PARAMETER_NOMINAL_RANGES = {
 }
 
 ### Parameter units (for UI display) ###
+# Human-readable unit strings returned via /api/config and used in chart labels.
 PARAMETER_UNITS = {
     "O2 partial pressure":                  "%",
     "CO2 partial pressure":                 "%",
@@ -145,35 +155,10 @@ PARAMETER_UNITS = {
     "H2O":                                  "% RH",
 }
 
-### Cross-parameter physical correlations ###
-PARAMETER_CORRELATIONS = [
-    {"parameters": ["O2 partial pressure", "O2 output rate (generator)"],
-     "correlation": "OGA monitors O2 partial pressure; increases production when pressure drops below threshold."},
-    {"parameters": ["Cabin pressure", "O2 partial pressure", "CO2 partial pressure", "N2", "H2O"],
-     "correlation": "Total cabin pressure = sum of all gas partial pressures (Dalton's Law)."},
-    {"parameters": ["CO2 partial pressure", "Airflow rate"],
-     "correlation": "Constant airflow prevents localized CO2 accumulation in microgravity."},
-    {"parameters": ["Humidity", "Bacterial/fungal count"],
-     "correlation": "RH > 80% facilitates rapid microbial growth in spacecraft dust."},
-    {"parameters": ["Temperature", "Humidity"],
-     "correlation": "Coupled via CCAA — regulates temperature by cooling below dew point."},
-    {"parameters": ["Temperature", "Production rate (water recovery system)"],
-     "correlation": "WRS production rate is proportional to brine temperature."},
-    {"parameters": ["Water purity", "Production rate (water recovery system)"],
-     "correlation": "Higher recovery rates increase TOC/metals concentration in brine."},
-    {"parameters": ["O2 purity (generator)", "H2 (ppm)", "H2 (%)"],
-     "correlation": "H2 sensors monitor O2 stream for cell stack leaks."},
-    {"parameters": ["CO2", "H2 (%)", "CH4", "H2O"],
-     "correlation": "Linked via the Sabatier process: CO2 + H2 → H2O + CH4."},
-    {"parameters": ["NH3", "Temperature"],
-     "correlation": "NH3 used as external thermal medium; increase indicates heat exchange leak."},
-    {"parameters": ["N2", "Cabin pressure"],
-     "correlation": "N2 partial pressure tracks overboard cabin air leakage."},
-    {"parameters": ["CO", "CO2"],
-     "correlation": "Both metabolic byproducts monitored against SMACs limits."},
-]
-
 ### Fault definitions and parameter impacts ###
+# Each fault maps to per-parameter drift coefficients (fraction of nominal span per hour).
+# Positive = parameter drifts upward; negative = downward.
+# data_generator.py multiplies these by span * rate * (step_seconds/3600) each tick.
 FAULT_IMPACT_SEVERITY = {
     "Cabin Leak": {
         "impacts": {
@@ -250,6 +235,8 @@ FAULT_IMPACT_SEVERITY = {
 }
 
 ### Remediation actions ###
+# Ordered list of actions the DQN can recommend. Index 0 is always "no action".
+# Kept in sync with FAULT_IMPACT_SEVERITY keys via ACTIONS_TO_FAULT below.
 ACTIONS_TO_TAKE = [
     "No Action Needed",
     "Use Sealant to Close Leak",
@@ -264,14 +251,18 @@ ACTIONS_TO_TAKE = [
     "Reopen Reference Gas Valve",
 ]
 
+# Maps each non-noop action → the fault it remediates (skips index-0 "No Action Needed").
+# Used by DQNRecommender._FAULT_TO_ACTION (inverted at import time).
 ACTIONS_TO_FAULT = {
     action: fault
     for action, fault in zip(ACTIONS_TO_TAKE[1:], FAULT_IMPACT_SEVERITY.keys())
 }
 
-### How many hours of precursor signals appear before each fault becomes critical ###
-# Calibrated to physics-based drift rates after time-scaling fix in data_generator.py.
-# These represent the detection window, not time-to-catastrophic-failure.
+### Fault detection window (precursor hours) ###
+# How long before critical failure anomaly signals first appear for each fault.
+# Used by: LSTM training (RUL countdown), DQN fallback when LSTM buffer is still filling,
+#           and /api/maintenance endpoint.
+# Calibrated to physics-based drift rates; represents detection window, not time-to-failure.
 FAULT_PRECURSOR_HOURS = {
     "Cabin Leak":                            8.0,   # ~0.07 psia/hr drop; exits nominal in ~6-8 h
     "O2 Generator Failure":                 24.0,   # OGS MTBF 3,104 h observed; degradation ~24 h precursor
@@ -283,8 +274,11 @@ FAULT_PRECURSOR_HOURS = {
     "NH3 Coolant Leak":                      2.0,   # Fast detection; NH3 25 ppm caution in <2 h for major leak
 }
 
-### Numeric parameter correlations for Cholesky correlated noise (training) ###
-# Keys are (param_a, param_b), value is Pearson r in [-1, 1]
+### Numeric parameter correlations for Cholesky correlated noise ###
+# Pearson r values for cross-parameter relationships observed in ISS operational data.
+# data_generator._build_cholesky() uses these to build a lower-triangular matrix L
+# so that z @ L.T produces physically correlated noise draws.
+# Keys are (param_a, param_b); value is Pearson r in [-1, 1].
 PARAMETER_CORRELATION_MATRIX = {
     ("O2 partial pressure",  "CO2 partial pressure"):       -0.82,
     ("O2 partial pressure",  "N2"):                         -0.60,
@@ -299,7 +293,9 @@ PARAMETER_CORRELATION_MATRIX = {
     ("Water purity",         "Production rate (water recovery system)"): -0.45,
 }
 
-### Long-term nominal aging rates (per simulated day) — normal wear, not faults ###
+### Long-term nominal aging rates (per simulated day) ###
+# Slow baseline drift applied every tick regardless of fault state.
+# Models gradual component wear: scrubber loading, WRS purity degradation, OGS membrane aging.
 NOMINAL_AGING_PER_DAY = {
     "CO2 partial pressure":                  +0.001,   # scrubber slowly loads
     "Water purity":                          +0.002,   # WRS purity slowly degrades
@@ -308,6 +304,8 @@ NOMINAL_AGING_PER_DAY = {
 }
 
 ### Per-sensor noise sigma (fraction of nominal span, 1-sigma) ###
+# Used in data_generator._baseline() as: noise = sensor_z * sigma * span.
+# Combines with the Cholesky-correlated noise (1% of span) for realistic multi-sensor readings.
 # Sources: MCA spectrometer ±0.15 mmHg CO2; galvanic O2 ±0.1-0.5%;
 #          PCA pressure ±0.01 psi; TOCA TOC ±25%; temperature ±0.2°C
 SENSOR_NOISE_SIGMA = {
@@ -334,6 +332,7 @@ SENSOR_NOISE_SIGMA = {
 }
 
 ### Sensor/subsystem mean time between failures (hours, observed ISS data) ###
+# Used by /api/maintenance to compute % life used and replacement urgency.
 # Sources: NASA post-flight ECLSS anomaly reports, ICES papers, JSC-62802
 # Key correction notes:
 #   OGS: actual 3,104h observed (pre-flight estimate was 8,437h — 63% worse)
@@ -357,9 +356,11 @@ SENSOR_MTBF_HOURS = {
 }
 
 ### Maintenance recommendations per fault/subsystem ###
-# maintenance_type: "condition_based" = inspect/replace when condition threshold met
-#                   "calendar_based"  = replace on fixed schedule regardless of condition
-# source: primary reference for the interval
+# Detailed maintenance guidance returned by /api/maintenance alongside MTBF life-fraction data.
+# maintenance_type:
+#   "condition_based" — inspect/replace when a sensor threshold is breached
+#   "calendar_based"  — replace on fixed schedule regardless of condition
+# source: primary NASA/ICES reference document for the interval
 MAINTENANCE_RECOMMENDATIONS = {
     "O2 Generator Failure": {
         "subsystem":          "Oxygen Generation Assembly (OGA/OGS)",
@@ -427,7 +428,9 @@ MAINTENANCE_RECOMMENDATIONS = {
     },
 }
 
-### Sensor calibration drift rate (fraction of nominal span per week, 1-sigma) ###
+### Sensor calibration drift rate (fraction of nominal span per week) ###
+# Applied in data_generator._baseline() to simulate long-term sensor bias accumulation.
+# Also drives the calibration schedule in /api/maintenance: alert when cumulative drift > 2% of span.
 # Sources: ICES-2019-234 (MCA), ICES-2022-289 (galvanic O2), JSC-62802 cal intervals
 # Key correction notes:
 #   CO2 (MCA ECV): ~0.19%/6wk = 0.032%/wk; MCA cal interval 6 weeks (extendable to 12)

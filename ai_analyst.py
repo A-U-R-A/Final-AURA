@@ -27,6 +27,8 @@ _OLLAMA_CHECK_TTL = 60.0
 
 
 def _is_ollama_available() -> bool:
+    """Check whether a local Ollama daemon is reachable, with a 60-second result cache.
+    Calling ollama.list() is a lightweight HTTP probe — if it raises, Ollama is down."""
     global _ollama_ok, _ollama_checked_at
     now = time.monotonic()
     if _ollama_ok is not None and (now - _ollama_checked_at) < _OLLAMA_CHECK_TTL:
@@ -42,7 +44,8 @@ def _is_ollama_available() -> bool:
 
 
 def get_backend() -> str:
-    """Return 'ollama', 'groq', or 'none'."""
+    """Return 'ollama', 'groq', or 'none' — the highest-priority available backend.
+    Ollama (local, no rate limit) takes precedence over Groq (remote, free-tier limited)."""
     if _is_ollama_available():
         return "ollama"
     if os.getenv("GROQ_API_KEY"):
@@ -95,7 +98,8 @@ WHEN DOING ANALYSIS:
 
 
 def _compact(d: dict) -> str:
-    """Single-line compact representation of a dict, shorter than json.dumps."""
+    """Produce a compact single-line dict string for embedding in the system prompt.
+    Shorter than json.dumps — avoids quote noise and uses less of the context window."""
     return "{" + ", ".join(f"{k}: {v}" for k, v in d.items()) + "}"
 
 
@@ -105,6 +109,10 @@ def _compact(d: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _build_snapshot(db, n_readings: int) -> str:
+    """Build a compact tabular snapshot of current system state for injection into the AI prompt.
+    Uses pipe-separated tables instead of JSON to minimise token count.
+    Injected only into the LAST user message turn — previous history is left untouched
+    so token cost stays O(1) per turn rather than O(n_turns)."""
     lines = ["[BACKGROUND SYSTEM DATA — reference this only if relevant to the user's message]"]
 
     # ── Location status table ─────────────────────────────────────────────
@@ -194,6 +202,9 @@ def _build_snapshot(db, n_readings: int) -> str:
 # ---------------------------------------------------------------------------
 
 def _stream_ollama(messages: list, model: str):
+    """Generator that yields text tokens from Ollama's streaming chat endpoint.
+    Handles both object-style (chunk.message.content) and dict-style chunk formats
+    for forward-compatibility with different Ollama client versions."""
     import ollama
     for chunk in ollama.chat(model=model, messages=messages, stream=True):
         try:
@@ -206,6 +217,9 @@ def _stream_ollama(messages: list, model: str):
 
 
 def _stream_groq(messages: list, model: str):
+    """Generator that yields text tokens from the Groq API.
+    Maps Ollama model names (mistral, llama3) to equivalent Groq model IDs via GROQ_MODEL_MAP.
+    temperature=0.3 and max_tokens=2048 keep responses focused and within free-tier limits."""
     from groq import Groq
     groq_model = GROQ_MODEL_MAP.get(model, GROQ_DEFAULT_MODEL)
     client = Groq(api_key=os.environ["GROQ_API_KEY"])

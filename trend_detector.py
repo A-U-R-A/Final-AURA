@@ -21,7 +21,16 @@ import constants
 
 def mann_kendall(x: list[float]) -> dict:
     """
-    Non-parametric trend test.  No library dependency — pure Python/NumPy.
+    Non-parametric monotonic trend test.  No external library — pure Python/NumPy.
+
+    The test counts concordant (S += 1) vs. discordant (S -= 1) pairs of readings.
+    A large positive S → upward trend; large negative → downward.
+
+    S is approximately normally distributed for n ≥ 10, so we compute:
+        Z = (S ± 1) / sqrt(Var(S))     (continuity correction)
+    and derive a two-tailed p-value using the standard normal CDF.
+
+    Kendall's τ = S / (n*(n-1)/2) normalises S to [-1, 1].
 
     Returns:
         {
@@ -36,7 +45,7 @@ def mann_kendall(x: list[float]) -> dict:
     if n < 4:
         return {"tau": 0.0, "p_value": 1.0, "trend": "no trend", "significant": False}
 
-    # S statistic
+    # S = sum of sign(x[j] - x[i]) for all i < j pairs
     S = 0
     for i in range(n - 1):
         for j in range(i + 1, n):
@@ -46,10 +55,10 @@ def mann_kendall(x: list[float]) -> dict:
             elif diff < 0:
                 S -= 1
 
-    # Variance of S (simplified, no tie correction)
+    # Variance of S under H0 (simplified formula, no tie correction needed for continuous data)
     var_S = n * (n - 1) * (2 * n + 5) / 18.0
 
-    # Z statistic
+    # Z with continuity correction (±1 adjustment brings discrete S closer to normal)
     if S > 0:
         Z = (S - 1) / math.sqrt(var_S)
     elif S < 0:
@@ -57,7 +66,7 @@ def mann_kendall(x: list[float]) -> dict:
     else:
         Z = 0.0
 
-    # Two-tailed p-value (normal approximation)
+    # Two-tailed p-value from normal approximation
     p_value = 2.0 * (1.0 - _norm_cdf(abs(Z)))
 
     tau = S / (0.5 * n * (n - 1))
@@ -106,7 +115,15 @@ def sens_slope(x: list[float]) -> float:
 
 def cusum_change_point(x: list[float], threshold: float = 5.0) -> dict:
     """
-    Cumulative-sum control chart to detect a single step change.
+    Cumulative-sum (CUSUM) control chart to detect a single step-change.
+
+    Tracks two accumulators — S_hi (upward drift) and S_lo (downward drift) —
+    both reset to zero when they go negative (the max(0, ...) clamp).
+    The baseline mean and std are estimated from the first 5 readings.
+    0.5 is a slack parameter (k): reduces sensitivity to small, insignificant drifts.
+
+    The threshold of 5.0 corresponds to 5 standard deviations of accumulated
+    normalised deviation — chosen empirically to give ~1 false alarm per 500 readings.
 
     Returns:
         {"detected": bool, "change_index": int | None,
@@ -116,15 +133,18 @@ def cusum_change_point(x: list[float], threshold: float = 5.0) -> dict:
     if len(x) < 5:
         return {"detected": False, "change_index": None, "direction": None}
 
+    # Baseline estimated from first 5 readings (pre-fault window)
     mu = x[:5].mean()
-    sigma = x[:5].std() + 1e-8
+    sigma = x[:5].std() + 1e-8   # +ε prevents divide-by-zero for flat signals
 
     S_hi = np.zeros(len(x))
     S_lo = np.zeros(len(x))
     for i in range(1, len(x)):
+        # Accumulate normalised deviation; reset to 0 if the signal reverts (clamp)
         S_hi[i] = max(0, S_hi[i-1] + (x[i] - mu) / sigma - 0.5)
         S_lo[i] = max(0, S_lo[i-1] - (x[i] - mu) / sigma - 0.5)
 
+    # Report the first index where the accumulator crosses the threshold
     if S_hi.max() > threshold:
         idx = int(np.argmax(S_hi > threshold))
         return {"detected": True, "change_index": idx, "direction": "up"}
@@ -139,8 +159,12 @@ def cusum_change_point(x: list[float], threshold: float = 5.0) -> dict:
 
 def rolling_zscore(x: list[float], window: int = 20) -> float:
     """
-    Z-score of the most recent value relative to the last `window` values.
-    High absolute value (>2) suggests a sudden shift.
+    Z-score of the most recent value relative to the preceding `window` values.
+    Detects sudden point anomalies (spikes) that Mann-Kendall might miss because
+    it only tests monotonic trends, not isolated jumps.
+
+    |z| > 2.5 triggers an 'advisory' severity in _classify_severity().
+    Returns 0.0 when the series is too short or perfectly flat.
     """
     x = np.asarray(x, dtype=float)
     if len(x) < window + 1:
