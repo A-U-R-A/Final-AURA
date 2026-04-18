@@ -7,7 +7,7 @@
   "latch_threshold": 0.95,
   "latch_min_consecutive": 3,
   "dqn_rf_bypass_threshold": 0.92,
-  "tick_interval_seconds": 60,
+  "tick_interval_seconds": 1,
   "noise_scale": 1,
   "crew_event_frequency": "low",
   "fault_injection_enabled": true,

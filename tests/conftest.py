@@ -6,6 +6,7 @@ with an isolated test DB so tests never touch data/aura.db.
 The generation loop runs normally but against the test DB.
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -16,6 +17,23 @@ import pytest
 # Ensure project root is importable
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+
+_SETTINGS_FILE = ROOT / "data" / "settings.json"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _preserve_settings():
+    """Snapshot data/settings.json before tests and restore it after.
+    Prevents test PATCH /api/settings/* calls from permanently changing
+    tick_interval_seconds, jwt_secret, etc. in the real settings file."""
+    snapshot = None
+    if _SETTINGS_FILE.exists():
+        snapshot = _SETTINGS_FILE.read_text()
+    yield
+    if snapshot is not None:
+        _SETTINGS_FILE.write_text(snapshot)
+    elif _SETTINGS_FILE.exists():
+        _SETTINGS_FILE.unlink()  # file didn't exist before — remove it
 
 
 # ---------------------------------------------------------------------------
