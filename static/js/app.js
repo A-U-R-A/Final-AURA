@@ -49,6 +49,7 @@ async function boot() {
   buildAlerts();
   buildAnalyst();
   buildMaintenance();
+  buildSettings();
   connectWebSocket();
 
   // Load initial location states before any WS tick arrives
@@ -96,9 +97,10 @@ async function refreshAlertBadge() {
 function populateSelects() {
   const { locations, faults } = state.config;
 
-  // Twin sidebar
-  populateSelect("inject-location", locations);
-  populateSelect("inject-fault", faults);
+  // Settings faults tab
+  populateSelect("s-inject-location", locations);
+  populateSelect("s-inject-fault", faults);
+  _updateFaultDesc();
 
   // Dashboard
   $("btn-dashboard-refresh").addEventListener("click", refreshDashboard);
@@ -315,14 +317,11 @@ function buildDigitalTwin() {
   }
   tryInit();
 
-  $("btn-inject").addEventListener("click", injectFault);
   $("btn-reset-camera").addEventListener("click", () => {
     if (typeof window.twinResetCamera === "function") {
       window.twinResetCamera();
     }
   });
-  $("btn-clear-faults").addEventListener("click", clearAllFaults);
-  $("btn-clear-data").addEventListener("click", clearData);
   $("latch-popup-dismiss").addEventListener("click", dismissLatchPopup);
 }
 
@@ -353,8 +352,8 @@ function updateLocationList() {
 }
 
 async function injectFault() {
-  const location = $("inject-location").value;
-  const fault = $("inject-fault").value;
+  const location = $("s-inject-location").value;
+  const fault = $("s-inject-fault").value;
   try {
     await apiPost("/api/faults/inject", { location, fault });
     showToast(`Fault injected: ${fault} @ ${location}`, "info");
@@ -1616,6 +1615,512 @@ function showLatchPopup(location, faultType, confidence) {
 function dismissLatchPopup() {
   $("latch-overlay").classList.add("hidden");
   _stopAlarm();
+}
+
+// ============================================================
+//  SETTINGS PAGE
+// ============================================================
+
+const _SETTINGS_TOKEN_KEY = "aura_settings_token";
+let _exportMaxId = null;
+
+function _settingsToken()         { return sessionStorage.getItem(_SETTINGS_TOKEN_KEY); }
+function _settingsAuthHeader()    { return { "Authorization": `Bearer ${_settingsToken()}` }; }
+function _settingsClearToken()    { sessionStorage.removeItem(_SETTINGS_TOKEN_KEY); }
+function _settingsSaveToken(tok)  { sessionStorage.setItem(_SETTINGS_TOKEN_KEY, tok); }
+
+async function _settingsFetch(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { "Content-Type": "application/json", ..._settingsAuthHeader(), ...(opts.headers || {}) },
+  });
+  if (res.status === 401) {
+    _settingsClearToken();
+    _showSettingsLogin();
+    throw new Error("Session expired");
+  }
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+async function _settingsExportCsv() {
+  const res = await fetch("/api/settings/data/export/csv", {
+    headers: { "Authorization": `Bearer ${_settingsToken()}` },
+  });
+  if (res.status === 401) {
+    _settingsClearToken();
+    _showSettingsLogin();
+    throw new Error("Session expired");
+  }
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+
+  const maxId    = parseInt(res.headers.get("X-Export-Max-Id")    || "0");
+  const rowCount = parseInt(res.headers.get("X-Export-Row-Count") || "0");
+  const disp     = res.headers.get("Content-Disposition") || "";
+  const fnMatch  = disp.match(/filename="([^"]+)"/);
+  const filename = fnMatch ? fnMatch[1] : "aura_export.csv";
+
+  const blob = await res.blob();
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  return { maxId, rowCount };
+}
+
+function _showSettingsLogin() {
+  $("settings-login").classList.remove("hidden");
+  $("settings-panel").classList.add("hidden");
+}
+
+function _showSettingsPanel() {
+  $("settings-login").classList.add("hidden");
+  $("settings-panel").classList.remove("hidden");
+}
+
+function buildSettings() {
+  // Login form
+  $("btn-settings-login").addEventListener("click", _doSettingsLogin);
+  $("settings-password").addEventListener("keydown", e => {
+    if (e.key === "Enter") _doSettingsLogin();
+  });
+
+  // Lock button
+  $("btn-settings-logout").addEventListener("click", async () => {
+    try { await _settingsFetch("/api/auth/logout", { method: "POST" }); } catch (_) {}
+    _settingsClearToken();
+    _showSettingsLogin();
+    $("settings-password").value = "";
+  });
+
+  // Inner tab switching
+  document.querySelectorAll(".settings-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".settings-tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".settings-pane").forEach(p => p.classList.add("hidden"));
+      btn.classList.add("active");
+      $(`stab-${btn.dataset.stab}`).classList.remove("hidden");
+      if (btn.dataset.stab === "ml") _loadMlStatus();
+      if (btn.dataset.stab === "integrations") _loadIntegrationStatus();
+      if (btn.dataset.stab === "faults") _loadFaultStatus();
+    });
+  });
+
+  // Data tab buttons
+  $("btn-clear-sensor-data").addEventListener("click", async () => {
+    if (!confirm("Clear ALL sensor data and reset LSTM buffers? Cannot be undone.")) return;
+    try {
+      await _settingsFetch("/api/settings/data/sensor", { method: "DELETE" });
+      showToast("Sensor data cleared", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+  $("btn-clear-alert-history").addEventListener("click", async () => {
+    if (!confirm("Delete all alert history?")) return;
+    try {
+      await _settingsFetch("/api/settings/data/alerts", { method: "DELETE" });
+      showToast("Alert history cleared", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+  $("btn-clear-faults-settings").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/data/faults", { method: "DELETE" });
+      showToast("Faults cleared", "success");
+      await refreshLocationStates();
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+  $("btn-clear-lstm").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/data/lstm", { method: "DELETE" });
+      showToast("LSTM buffers cleared", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // Export CSV
+  $("btn-export-csv").addEventListener("click", async () => {
+    const btn = $("btn-export-csv");
+    btn.disabled = true;
+    btn.textContent = "Exporting…";
+    $("export-result").classList.add("hidden");
+    try {
+      const { maxId, rowCount } = await _settingsExportCsv();
+      _exportMaxId = maxId;
+      $("export-result-text").textContent = rowCount > 0
+        ? `✓ Export complete — ${rowCount.toLocaleString()} location readings (ticks through #${maxId.toLocaleString()})`
+        : "✓ Export complete — database was empty";
+      $("export-result").classList.remove("hidden");
+      $("btn-export-clear").disabled = maxId === 0;
+    } catch (e) {
+      showToast(`Export failed: ${e.message}`, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Export to CSV";
+    }
+  });
+  $("btn-export-keep").addEventListener("click", () => {
+    $("export-result").classList.add("hidden");
+    _exportMaxId = null;
+  });
+  $("btn-export-clear").addEventListener("click", async () => {
+    if (!confirm(
+      `Delete ${_exportMaxId.toLocaleString()} ticks of exported data?\n\nReadings generated after the export started are safe.`
+    )) return;
+    try {
+      const data = await _settingsFetch("/api/settings/data/exported", {
+        method: "DELETE",
+        body: JSON.stringify({ max_id: _exportMaxId }),
+      });
+      showToast(`Cleared ${data.deleted_rows.toLocaleString()} rows`, "success");
+      $("export-result").classList.add("hidden");
+      _exportMaxId = null;
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // Alert settings save
+  $("btn-save-alerts").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/alerts", {
+        method: "PATCH",
+        body: JSON.stringify({ updates: {
+          alert_min_consecutive:  parseInt($("s-alert-min-consecutive").value),
+          alert_cooldown_seconds: parseInt($("s-alert-cooldown").value),
+          alert_critical_rf_gate: parseFloat($("s-alert-critical-rf").value),
+          latch_threshold:        parseFloat($("s-latch-threshold").value),
+          latch_min_consecutive:  parseInt($("s-latch-min-consec").value),
+          dqn_rf_bypass_threshold: parseFloat($("s-dqn-bypass").value),
+        }}),
+      });
+      showToast("Alert settings saved", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // Generation settings save
+  $("btn-save-generation").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/generation", {
+        method: "PATCH",
+        body: JSON.stringify({ updates: {
+          tick_interval_seconds: parseFloat($("s-tick-interval").value),
+          noise_scale:           parseFloat($("s-noise-scale").value),
+          crew_event_frequency:  $("s-crew-freq").value,
+          fault_injection_enabled: $("s-fault-injection").checked,
+        }}),
+      });
+      showToast("Generation settings saved", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // Trend settings save
+  $("btn-save-trends").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/trends", {
+        method: "PATCH",
+        body: JSON.stringify({ updates: {
+          mk_p_threshold:          parseFloat($("s-mk-p").value),
+          mk_tau_advisory:         parseFloat($("s-mk-tau-advisory").value),
+          mk_tau_warning:          parseFloat($("s-mk-tau-warning").value),
+          slope_magnitude_gate:    parseFloat($("s-slope-gate").value),
+          cusum_threshold:         parseFloat($("s-cusum-threshold").value),
+          cusum_baseline_pct:      parseFloat($("s-cusum-baseline").value),
+          zscore_threshold:        parseFloat($("s-zscore-threshold").value),
+          zscore_single_threshold: parseFloat($("s-zscore-single").value),
+          zscore_window:           parseInt($("s-zscore-window").value),
+        }}),
+      });
+      showToast("Trend settings saved", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // Display settings save
+  $("btn-save-display").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/display", {
+        method: "PATCH",
+        body: JSON.stringify({ updates: {
+          mission_start_iso:   $("s-mission-start").value || null,
+          dashboard_refresh_ms: parseInt($("s-dashboard-refresh").value),
+          chat_max_stored:     parseInt($("s-chat-max").value),
+          trends_default_n:    parseInt($("s-trends-n").value),
+          detail_default_n:    parseInt($("s-detail-n").value),
+        }}),
+      });
+      showToast("Display settings saved", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // Groq key
+  $("btn-groq-show").addEventListener("click", () => {
+    const inp = $("s-groq-key");
+    inp.type = inp.type === "password" ? "text" : "password";
+    $("btn-groq-show").textContent = inp.type === "password" ? "Show" : "Hide";
+  });
+  $("btn-save-groq").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/integrations/groq", {
+        method: "PATCH",
+        body: JSON.stringify({ updates: { groq_api_key: $("s-groq-key").value } }),
+      });
+      showToast("Groq API key saved", "success");
+      $("s-groq-key").value = "";
+      $("groq-status-badge").textContent = "saved";
+      $("groq-status-badge").className = "integration-badge ok";
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+  $("btn-test-groq").addEventListener("click", async () => {
+    const res = $("groq-test-result");
+    res.textContent = "Testing…";
+    res.className = "integration-result";
+    res.classList.remove("hidden");
+    try {
+      const data = await _settingsFetch("/api/settings/integrations/groq/test", { method: "POST", body: JSON.stringify({updates:{}}) });
+      if (data.ok) {
+        res.textContent = "✓ Connection successful";
+        res.className = "integration-result ok";
+        $("groq-status-badge").textContent = "connected";
+        $("groq-status-badge").className = "integration-badge ok";
+      } else {
+        res.textContent = `✗ ${data.error}`;
+        res.className = "integration-result error";
+        $("groq-status-badge").textContent = "error";
+        $("groq-status-badge").className = "integration-badge error";
+      }
+    } catch (e) {
+      res.textContent = `Error: ${e.message}`;
+      res.className = "integration-result error";
+    }
+  });
+
+  // Password change
+  $("btn-change-password").addEventListener("click", async () => {
+    const result = $("pw-change-result");
+    const newPw  = $("s-pw-new").value;
+    const confirm = $("s-pw-confirm").value;
+    if (newPw !== confirm) {
+      result.textContent = "New passwords do not match";
+      result.className = "settings-result error";
+      result.classList.remove("hidden");
+      return;
+    }
+    if (newPw.length < 6) {
+      result.textContent = "Password must be at least 6 characters";
+      result.className = "settings-result error";
+      result.classList.remove("hidden");
+      return;
+    }
+    try {
+      await _settingsFetch("/api/settings/security/change-password", {
+        method: "POST",
+        body: JSON.stringify({ current: $("s-pw-current").value, new_password: newPw }),
+      });
+      result.textContent = "✓ Password changed successfully";
+      result.className = "settings-result ok";
+      result.classList.remove("hidden");
+      $("s-pw-current").value = "";
+      $("s-pw-new").value = "";
+      $("s-pw-confirm").value = "";
+    } catch (e) {
+      result.textContent = e.message.includes("400") ? "Current password incorrect" : `Error: ${e.message}`;
+      result.className = "settings-result error";
+      result.classList.remove("hidden");
+    }
+  });
+
+  // Revoke all sessions
+  $("btn-revoke-sessions").addEventListener("click", async () => {
+    if (!confirm("This will log out ALL active sessions including yours. Continue?")) return;
+    try {
+      await _settingsFetch("/api/settings/security/revoke-all", { method: "POST", body: JSON.stringify({}) });
+    } catch (_) {}
+    _settingsClearToken();
+    _showSettingsLogin();
+    showToast("All sessions revoked", "info");
+  });
+
+  // Faults tab
+  $("btn-s-refresh-faults").addEventListener("click", _loadFaultStatus);
+  $("s-inject-fault").addEventListener("change", _updateFaultDesc);
+  $("btn-s-inject").addEventListener("click", async () => {
+    try {
+      await injectFault();
+      _loadFaultStatus();
+    } catch (_) {}
+  });
+  $("btn-s-clear-all-faults").addEventListener("click", async () => {
+    if (!confirm("Clear all injected faults?")) return;
+    try {
+      await apiDelete("/api/faults");
+      showToast("All faults cleared", "success");
+      await refreshLocationStates();
+      _loadFaultStatus();
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+  // Resolve individual fault via event delegation
+  $("s-active-faults-table").addEventListener("click", async e => {
+    const btn = e.target.closest("[data-resolve]");
+    if (!btn) return;
+    const loc = btn.dataset.resolve;
+    try {
+      await apiDelete(`/api/faults/${encodeURIComponent(loc)}`);
+      showToast(`Fault resolved: ${loc}`, "success");
+      await refreshLocationStates();
+      _loadFaultStatus();
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // If we already have a token from this session, go straight to panel
+  if (_settingsToken()) {
+    _showSettingsPanel();
+    _loadSettingsValues();
+  }
+}
+
+async function _doSettingsLogin() {
+  const pw  = $("settings-password").value;
+  const err = $("settings-login-error");
+  err.classList.add("hidden");
+  try {
+    const data = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pw }),
+    }).then(async r => {
+      if (!r.ok) throw new Error("Invalid password");
+      return r.json();
+    });
+    _settingsSaveToken(data.token);
+    $("settings-password").value = "";
+    _showSettingsPanel();
+    _loadSettingsValues();
+  } catch (e) {
+    err.textContent = "Invalid password";
+    err.classList.remove("hidden");
+  }
+}
+
+async function _loadSettingsValues() {
+  try {
+    const s = await _settingsFetch("/api/settings");
+    // Alerts
+    $("s-alert-min-consecutive").value = s.alert_min_consecutive;
+    $("s-alert-cooldown").value        = s.alert_cooldown_seconds;
+    $("s-alert-critical-rf").value     = s.alert_critical_rf_gate;
+    $("s-latch-threshold").value       = s.latch_threshold;
+    $("s-latch-min-consec").value      = s.latch_min_consecutive;
+    $("s-dqn-bypass").value            = s.dqn_rf_bypass_threshold;
+    // Generation
+    $("s-tick-interval").value  = s.tick_interval_seconds;
+    $("s-noise-scale").value    = s.noise_scale;
+    $("s-crew-freq").value      = s.crew_event_frequency;
+    $("s-fault-injection").checked = s.fault_injection_enabled;
+    // Trends
+    $("s-mk-p").value            = s.mk_p_threshold;
+    $("s-mk-tau-advisory").value = s.mk_tau_advisory;
+    $("s-mk-tau-warning").value  = s.mk_tau_warning;
+    $("s-slope-gate").value      = s.slope_magnitude_gate;
+    $("s-cusum-threshold").value = s.cusum_threshold;
+    $("s-cusum-baseline").value  = s.cusum_baseline_pct;
+    $("s-zscore-threshold").value = s.zscore_threshold;
+    $("s-zscore-single").value   = s.zscore_single_threshold;
+    $("s-zscore-window").value   = s.zscore_window;
+    // Display
+    $("s-mission-start").value      = s.mission_start_iso || "";
+    $("s-dashboard-refresh").value  = s.dashboard_refresh_ms;
+    $("s-chat-max").value           = s.chat_max_stored;
+    $("s-trends-n").value           = s.trends_default_n;
+    $("s-detail-n").value           = s.detail_default_n;
+    // Integrations
+    const badge = $("groq-status-badge");
+    if (s.groq_key_set) {
+      badge.textContent = "key saved";
+      badge.className = "integration-badge ok";
+    } else {
+      badge.textContent = "not configured";
+      badge.className = "integration-badge missing";
+    }
+  } catch (e) {
+    showToast(`Failed to load settings: ${e.message}`, "error");
+  }
+}
+
+async function _loadMlStatus() {
+  const container = $("ml-status-cards");
+  container.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const s = await _settingsFetch("/api/settings/ml/status");
+    const skMatch = s.sklearn_version === "1.8.0";
+    container.innerHTML = `
+      <div class="ml-status-card">
+        <div class="ml-status-card-name">Isolation Forest + Random Forest</div>
+        <div class="ml-status-card-row ${s.ml_enabled ? "ok" : "warn"}">${s.ml_enabled ? "✓ Loaded" : "✗ Not loaded"}</div>
+        <div class="ml-status-card-row ${skMatch ? "ok" : "warn"}">sklearn ${s.sklearn_version}${!skMatch ? " ⚠ Trained on 1.8.0 — retrain recommended" : ""}</div>
+      </div>
+      <div class="ml-status-card">
+        <div class="ml-status-card-name">LSTM Predictor</div>
+        <div class="ml-status-card-row ${s.lstm_enabled ? "ok" : "warn"}">${s.lstm_enabled ? "✓ Loaded" : "✗ Not loaded"}</div>
+      </div>
+      <div class="ml-status-card">
+        <div class="ml-status-card-name">DQN Recommender</div>
+        <div class="ml-status-card-row ${s.dqn_enabled ? "ok" : "warn"}">${s.dqn_enabled ? "✓ Loaded" : "✗ Not loaded"}</div>
+      </div>
+    `;
+  } catch (e) {
+    container.innerHTML = `<div class="loading">Error: ${e.message}</div>`;
+  }
+}
+
+async function _loadIntegrationStatus() {
+  try {
+    const s = await _settingsFetch("/api/settings");
+    const badge = $("groq-status-badge");
+    if (s.groq_key_set) {
+      badge.textContent = "key saved";
+      badge.className = "integration-badge ok";
+    } else {
+      badge.textContent = "not configured";
+      badge.className = "integration-badge missing";
+    }
+  } catch (_) {}
+}
+
+async function _loadFaultStatus() {
+  const container = $("s-active-faults-table");
+  container.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const states = await apiFetch("/api/locations");
+    const rows = Object.entries(states).map(([loc, s]) => {
+      const hasFault = s.active_fault;
+      return `<tr>
+        <td>${loc}</td>
+        <td class="${hasFault ? "fault-active" : "fault-none"}">${hasFault || "—"}</td>
+        <td>${hasFault
+          ? `<button class="btn btn-ghost btn-sm" data-resolve="${loc}">Resolve</button>`
+          : ""}</td>
+      </tr>`;
+    }).join("");
+    container.innerHTML = `
+      <table>
+        <thead><tr><th>Location</th><th>Active Fault</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  } catch (e) {
+    container.innerHTML = `<div class="loading">Error: ${e.message}</div>`;
+  }
+}
+
+function _updateFaultDesc() {
+  const fault = $("s-inject-fault").value;
+  const panel = $("s-fault-desc");
+  if (!fault || !state.config) { panel.classList.add("hidden"); return; }
+  const precursor = state.config.fault_precursor_hours?.[fault];
+  const impacts   = state.config.fault_impacts?.[fault] || [];
+  panel.innerHTML = `
+    <div class="fdp-name">${fault}</div>
+    <div class="fdp-row">Precursor window: <span>${precursor != null ? precursor + " h" : "—"}</span></div>
+    <div class="fdp-row">Affected parameters: <span>${impacts.join(", ") || "—"}</span></div>`;
+  panel.classList.remove("hidden");
 }
 
 // ── Start ────────────────────────────────────────────────────────────────────

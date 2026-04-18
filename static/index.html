@@ -37,6 +37,7 @@
     <button class="tab" data-page="alerts">Alerts <span id="alert-badge" class="alert-badge hidden">0</span></button>
     <button class="tab" data-page="analyst">AI Analyst</button>
     <button class="tab" data-page="maintenance">Maintenance</button>
+    <button class="tab" data-page="settings">⚙ Settings</button>
   </nav>
   <div class="topbar-right">
     <span class="status-badge" id="system-status">● INITIALIZING</span>
@@ -59,21 +60,6 @@
       <aside class="twin-sidebar">
         <h3>Module Status</h3>
         <div id="location-list" class="location-list"></div>
-
-        <h3>Fault Injection</h3>
-        <div class="control-group">
-          <label>Location</label>
-          <select id="inject-location"></select>
-        </div>
-        <div class="control-group">
-          <label>Fault</label>
-          <select id="inject-fault"></select>
-        </div>
-        <button class="btn btn-danger" id="btn-inject">Inject Fault</button>
-
-        <h3>Controls</h3>
-        <button class="btn btn-warning" id="btn-clear-faults">Clear All Faults</button>
-        <button class="btn btn-ghost" id="btn-clear-data">Clear All Data</button>
       </aside>
     </div>
   </section>
@@ -297,6 +283,328 @@
       </div>
 
     </div>
+  </section>
+
+
+  <!-- ── SETTINGS ───────────────────────────────────────────── -->
+  <section class="page" id="page-settings">
+
+    <!-- LOGIN WALL -->
+    <div id="settings-login" class="settings-login">
+      <div class="settings-login-card">
+        <div class="settings-login-icon">⚙</div>
+        <div class="settings-login-title">Admin Access Required</div>
+        <div class="settings-login-sub">Settings are protected. Enter the admin password to continue.</div>
+        <div class="settings-login-form">
+          <input type="password" id="settings-password" class="settings-password-input"
+                 placeholder="Password" autocomplete="current-password" />
+          <button class="btn btn-primary" id="btn-settings-login">Unlock</button>
+        </div>
+        <div id="settings-login-error" class="settings-login-error hidden"></div>
+      </div>
+    </div>
+
+    <!-- SETTINGS PANEL (shown after auth) -->
+    <div id="settings-panel" class="settings-panel hidden">
+
+      <div class="settings-topbar">
+        <span class="settings-title">System Settings</span>
+        <button class="btn btn-ghost btn-sm" id="btn-settings-logout">Lock</button>
+      </div>
+
+      <!-- Inner tab nav -->
+      <nav class="settings-tabs">
+        <button class="settings-tab active" data-stab="data">Data</button>
+        <button class="settings-tab" data-stab="alerts">Alerts</button>
+        <button class="settings-tab" data-stab="generation">Generation</button>
+        <button class="settings-tab" data-stab="faults">Faults</button>
+        <button class="settings-tab" data-stab="ml">ML Models</button>
+        <button class="settings-tab" data-stab="trends">Trends</button>
+        <button class="settings-tab" data-stab="integrations">Integrations</button>
+        <button class="settings-tab" data-stab="display">Display</button>
+        <button class="settings-tab" data-stab="security">Security</button>
+      </nav>
+
+      <div class="settings-content">
+
+        <!-- DATA -->
+        <div class="settings-pane active" id="stab-data">
+          <h3>Data Management</h3>
+          <div class="settings-actions-grid">
+            <div class="settings-action-card danger">
+              <div class="settings-action-title">Clear All Sensor Data</div>
+              <div class="settings-action-desc">Wipes all generated_data and anomaly_labels. Resets LSTM buffers.</div>
+              <button class="btn btn-danger" id="btn-clear-sensor-data">Clear Sensor Data</button>
+            </div>
+            <div class="settings-action-card danger">
+              <div class="settings-action-title">Clear Alert History</div>
+              <div class="settings-action-desc">Removes all alert records from the database.</div>
+              <button class="btn btn-danger" id="btn-clear-alert-history">Clear Alerts</button>
+            </div>
+            <div class="settings-action-card warning">
+              <div class="settings-action-title">Clear Active Faults</div>
+              <div class="settings-action-desc">Resets all injected faults, latched states, and alert streak counters.</div>
+              <button class="btn btn-warning" id="btn-clear-faults-settings">Clear Faults</button>
+            </div>
+            <div class="settings-action-card">
+              <div class="settings-action-title">Clear LSTM Buffers</div>
+              <div class="settings-action-desc">Forces all LSTM rolling windows to refill. Use after sensor recalibration.</div>
+              <button class="btn btn-ghost" id="btn-clear-lstm">Clear Buffers</button>
+            </div>
+          </div>
+
+          <div class="settings-export-card">
+            <div class="settings-export-header">
+              <div>
+                <div class="settings-action-title">Export Sensor Data</div>
+                <div class="settings-action-desc">Download all sensor readings as CSV. After export, choose to keep data or clear only the exported rows — any readings generated after the download started are never deleted.</div>
+              </div>
+              <button class="btn btn-primary" id="btn-export-csv">Export to CSV</button>
+            </div>
+            <div id="export-result" class="export-result hidden">
+              <span id="export-result-text" class="export-result-text"></span>
+              <div class="export-result-actions">
+                <button class="btn btn-ghost btn-sm" id="btn-export-keep">Keep All Data</button>
+                <button class="btn btn-danger btn-sm" id="btn-export-clear">Clear Exported Data</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ALERTS -->
+        <div class="settings-pane hidden" id="stab-alerts">
+          <h3>Alert Thresholds</h3>
+          <div class="settings-form">
+            <div class="settings-field">
+              <label>Min consecutive anomalous ticks before alert</label>
+              <input type="number" id="s-alert-min-consecutive" min="1" max="100" />
+            </div>
+            <div class="settings-field">
+              <label>Alert cooldown (seconds)</label>
+              <input type="number" id="s-alert-cooldown" min="0" max="3600" />
+            </div>
+            <div class="settings-field">
+              <label>CRITICAL severity RF confidence gate (0–1)</label>
+              <input type="number" id="s-alert-critical-rf" min="0" max="1" step="0.01" />
+            </div>
+            <div class="settings-field">
+              <label>Latch RF confidence threshold (0–1)</label>
+              <input type="number" id="s-latch-threshold" min="0" max="1" step="0.01" />
+            </div>
+            <div class="settings-field">
+              <label>Latch min consecutive ticks</label>
+              <input type="number" id="s-latch-min-consec" min="1" max="20" />
+            </div>
+            <div class="settings-field">
+              <label>DQN RF bypass threshold (0–1)</label>
+              <input type="number" id="s-dqn-bypass" min="0" max="1" step="0.01" />
+            </div>
+            <button class="btn btn-primary settings-save-btn" id="btn-save-alerts">Save Alert Settings</button>
+          </div>
+        </div>
+
+        <!-- GENERATION -->
+        <div class="settings-pane hidden" id="stab-generation">
+          <h3>Data Generation</h3>
+          <div class="settings-form">
+            <div class="settings-field">
+              <label>Tick interval (seconds)</label>
+              <input type="number" id="s-tick-interval" min="0.1" max="60" step="0.1" />
+            </div>
+            <div class="settings-field">
+              <label>Noise scale multiplier</label>
+              <input type="number" id="s-noise-scale" min="0.1" max="10" step="0.1" />
+            </div>
+            <div class="settings-field">
+              <label>Crew event frequency</label>
+              <select id="s-crew-freq">
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+            <div class="settings-field settings-field--toggle">
+              <label>Fault injection enabled</label>
+              <input type="checkbox" id="s-fault-injection" />
+            </div>
+            <button class="btn btn-primary settings-save-btn" id="btn-save-generation">Save Generation Settings</button>
+          </div>
+        </div>
+
+        <!-- FAULTS -->
+        <div class="settings-pane hidden" id="stab-faults">
+          <h3>Fault Management</h3>
+
+          <div class="settings-block">
+            <div class="settings-block-header">
+              <span class="settings-block-label">Active Faults</span>
+              <button class="btn btn-ghost btn-sm" id="btn-s-refresh-faults">Refresh</button>
+            </div>
+            <div id="s-active-faults-table" class="s-active-faults-table">
+              <div class="loading">Loading…</div>
+            </div>
+          </div>
+
+          <div class="settings-block" style="margin-top:20px">
+            <div class="settings-block-header">
+              <span class="settings-block-label">Inject Fault</span>
+            </div>
+            <div class="settings-form">
+              <div class="settings-field">
+                <label>Location</label>
+                <select id="s-inject-location"></select>
+              </div>
+              <div class="settings-field">
+                <label>Fault Type</label>
+                <select id="s-inject-fault"></select>
+              </div>
+              <div id="s-fault-desc" class="fault-desc-panel hidden"></div>
+              <button class="btn btn-danger settings-save-btn" id="btn-s-inject">Inject Fault</button>
+            </div>
+          </div>
+
+          <div class="settings-block" style="margin-top:20px">
+            <div class="settings-block-header">
+              <span class="settings-block-label">Bulk Actions</span>
+            </div>
+            <button class="btn btn-warning" id="btn-s-clear-all-faults">Clear All Injected Faults</button>
+          </div>
+        </div>
+
+        <!-- ML MODELS -->
+        <div class="settings-pane hidden" id="stab-ml">
+          <h3>ML Model Status</h3>
+          <div id="ml-status-cards" class="ml-status-cards"></div>
+        </div>
+
+        <!-- TRENDS -->
+        <div class="settings-pane hidden" id="stab-trends">
+          <h3>Trend Detection Sensitivity</h3>
+          <div class="settings-form">
+            <div class="settings-field">
+              <label>Mann-Kendall p-value threshold</label>
+              <input type="number" id="s-mk-p" min="0.001" max="0.1" step="0.001" />
+            </div>
+            <div class="settings-field">
+              <label>MK tau threshold for advisory</label>
+              <input type="number" id="s-mk-tau-advisory" min="0.1" max="1" step="0.01" />
+            </div>
+            <div class="settings-field">
+              <label>MK tau threshold for warning</label>
+              <input type="number" id="s-mk-tau-warning" min="0.1" max="1" step="0.01" />
+            </div>
+            <div class="settings-field">
+              <label>Slope magnitude gate (fraction of nominal span)</label>
+              <input type="number" id="s-slope-gate" min="0.001" max="0.5" step="0.001" />
+            </div>
+            <div class="settings-field">
+              <label>CUSUM threshold</label>
+              <input type="number" id="s-cusum-threshold" min="1" max="20" step="0.5" />
+            </div>
+            <div class="settings-field">
+              <label>CUSUM baseline window (fraction of data)</label>
+              <input type="number" id="s-cusum-baseline" min="0.05" max="0.5" step="0.01" />
+            </div>
+            <div class="settings-field">
+              <label>Z-score threshold (advisory, 2-signal)</label>
+              <input type="number" id="s-zscore-threshold" min="1" max="10" step="0.1" />
+            </div>
+            <div class="settings-field">
+              <label>Z-score single-signal threshold</label>
+              <input type="number" id="s-zscore-single" min="2" max="15" step="0.1" />
+            </div>
+            <div class="settings-field">
+              <label>Rolling z-score window (readings)</label>
+              <input type="number" id="s-zscore-window" min="5" max="100" />
+            </div>
+            <button class="btn btn-primary settings-save-btn" id="btn-save-trends">Save Trend Settings</button>
+          </div>
+        </div>
+
+        <!-- INTEGRATIONS -->
+        <div class="settings-pane hidden" id="stab-integrations">
+          <h3>Integrations</h3>
+
+          <div class="settings-integration-block">
+            <div class="integration-header">
+              <span class="integration-name">Groq API</span>
+              <span id="groq-status-badge" class="integration-badge">checking…</span>
+            </div>
+            <div class="integration-desc">Used as a cloud AI fallback when Ollama is unavailable. Free tier supported.</div>
+            <div class="settings-field settings-field--key">
+              <input type="password" id="s-groq-key" placeholder="gsk_…" autocomplete="off" />
+              <button class="btn btn-ghost btn-sm" id="btn-groq-show">Show</button>
+            </div>
+            <div class="integration-actions">
+              <button class="btn btn-primary" id="btn-save-groq">Save Key</button>
+              <button class="btn btn-ghost" id="btn-test-groq">Test Connection</button>
+            </div>
+            <div id="groq-test-result" class="integration-result hidden"></div>
+          </div>
+        </div>
+
+        <!-- DISPLAY -->
+        <div class="settings-pane hidden" id="stab-display">
+          <h3>Display &amp; UI</h3>
+          <div class="settings-form">
+            <div class="settings-field">
+              <label>Mission start (ISO datetime, e.g. 2025-01-01T00:00:00)</label>
+              <input type="text" id="s-mission-start" placeholder="2025-01-01T00:00:00" />
+            </div>
+            <div class="settings-field">
+              <label>Dashboard auto-refresh interval (ms)</label>
+              <input type="number" id="s-dashboard-refresh" min="5000" max="300000" step="1000" />
+            </div>
+            <div class="settings-field">
+              <label>Max chat messages stored in browser</label>
+              <input type="number" id="s-chat-max" min="10" max="200" />
+            </div>
+            <div class="settings-field">
+              <label>Default trends N readings</label>
+              <input type="number" id="s-trends-n" min="20" max="500" />
+            </div>
+            <div class="settings-field">
+              <label>Default detail chart N points</label>
+              <input type="number" id="s-detail-n" min="50" max="1000" />
+            </div>
+            <button class="btn btn-primary settings-save-btn" id="btn-save-display">Save Display Settings</button>
+          </div>
+        </div>
+
+        <!-- SECURITY -->
+        <div class="settings-pane hidden" id="stab-security">
+          <h3>Security</h3>
+
+          <div class="settings-security-block">
+            <div class="settings-security-label">Change Admin Password</div>
+            <div class="settings-form">
+              <div class="settings-field">
+                <label>Current password</label>
+                <input type="password" id="s-pw-current" autocomplete="current-password" />
+              </div>
+              <div class="settings-field">
+                <label>New password</label>
+                <input type="password" id="s-pw-new" autocomplete="new-password" />
+              </div>
+              <div class="settings-field">
+                <label>Confirm new password</label>
+                <input type="password" id="s-pw-confirm" autocomplete="new-password" />
+              </div>
+              <button class="btn btn-primary settings-save-btn" id="btn-change-password">Change Password</button>
+              <div id="pw-change-result" class="settings-result hidden"></div>
+            </div>
+          </div>
+
+          <div class="settings-security-block" style="margin-top:24px">
+            <div class="settings-security-label">Sessions</div>
+            <p class="settings-security-desc">Revoking all sessions invalidates every active token including this one. You will be logged out.</p>
+            <button class="btn btn-danger" id="btn-revoke-sessions">Revoke All Sessions</button>
+          </div>
+        </div>
+
+      </div><!-- /.settings-content -->
+    </div><!-- /#settings-panel -->
+
   </section>
 
 </main>

@@ -16,6 +16,17 @@ import math
 import numpy as np
 import constants
 
+# Module-level threshold vars — overridden at runtime by settings_manager.apply_to_trend_detector()
+MK_P_THRESHOLD          = 0.01
+MK_TAU_ADVISORY         = 0.35
+MK_TAU_WARNING          = 0.65
+SLOPE_MAGNITUDE_GATE    = 0.05
+CUSUM_THRESHOLD         = 7.0
+CUSUM_BASELINE_PCT      = 0.20
+ZSCORE_THRESHOLD        = 3.5
+ZSCORE_SINGLE_THRESHOLD = 4.5
+ZSCORE_WINDOW           = 30
+
 
 # ── Mann-Kendall test ─────────────────────────────────────────────────────────
 
@@ -70,7 +81,7 @@ def mann_kendall(x: list[float]) -> dict:
     p_value = 2.0 * (1.0 - _norm_cdf(abs(Z)))
 
     tau = S / (0.5 * n * (n - 1))
-    significant = p_value < 0.01
+    significant = p_value < MK_P_THRESHOLD
 
     if significant and tau > 0:
         trend = "increasing"
@@ -113,7 +124,7 @@ def sens_slope(x: list[float]) -> float:
 
 # ── CUSUM change-point ────────────────────────────────────────────────────────
 
-def cusum_change_point(x: list[float], threshold: float = 7.0) -> dict:
+def cusum_change_point(x: list[float], threshold: float | None = None) -> dict:
     """
     Cumulative-sum (CUSUM) control chart to detect a single step-change.
 
@@ -124,12 +135,14 @@ def cusum_change_point(x: list[float], threshold: float = 7.0) -> dict:
 
     threshold=7.0 gives ~1 false alarm per 2000 readings at this slack setting.
     """
+    if threshold is None:
+        threshold = CUSUM_THRESHOLD
     x = np.asarray(x, dtype=float)
     if len(x) < 15:
         return {"detected": False, "change_index": None, "direction": None}
 
-    # Baseline from first 20% of data (clamped to [15, 40] readings)
-    baseline_n = max(15, min(40, len(x) // 5))
+    baseline_pct = CUSUM_BASELINE_PCT
+    baseline_n = max(15, min(40, int(len(x) * baseline_pct)))
     mu    = x[:baseline_n].mean()
     sigma = x[:baseline_n].std()
     # Floor: 0.5% of the observed data range — prevents false alarms on near-flat signals
@@ -155,12 +168,14 @@ def cusum_change_point(x: list[float], threshold: float = 7.0) -> dict:
 
 # ── Rolling z-score ───────────────────────────────────────────────────────────
 
-def rolling_zscore(x: list[float], window: int = 30) -> float:
+def rolling_zscore(x: list[float], window: int | None = None) -> float:
     """
     Z-score of the most recent value relative to the preceding `window` values.
     Window raised to 30 for a more stable baseline.
     Returns 0.0 when the series is too short or perfectly flat.
     """
+    if window is None:
+        window = ZSCORE_WINDOW
     x = np.asarray(x, dtype=float)
     if len(x) < window + 1:
         return 0.0
@@ -262,7 +277,7 @@ def _classify_severity(
     projected_move = abs(slope) * len(values)
     slope_significant = projected_move >= 0.05 * span
 
-    if mk["significant"] and abs(mk["tau"]) > 0.65 and slope_significant:
+    if mk["significant"] and abs(mk["tau"]) > MK_TAU_WARNING and slope_significant:
         # Strong monotonic trend heading somewhere meaningful
         if nominal_range:
             current = values[-1]
@@ -276,18 +291,18 @@ def _classify_severity(
 
     # ── Advisory: require ≥ 2 independent signals, or 1 strong signal + magnitude ──
     signals = 0
-    if mk["significant"] and abs(mk["tau"]) > 0.35 and slope_significant:
+    if mk["significant"] and abs(mk["tau"]) > MK_TAU_ADVISORY and slope_significant:
         signals += 1
     if cusum["detected"]:
         signals += 1
-    if abs(z) > 3.5:
+    if abs(z) > ZSCORE_THRESHOLD:
         signals += 1
 
     if signals >= 2:
         return "advisory"
 
     # Single strong z-score alone (very large spike) still warrants advisory
-    if abs(z) > 4.5:
+    if abs(z) > ZSCORE_SINGLE_THRESHOLD:
         return "advisory"
 
     return "nominal"

@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Set
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -19,6 +19,7 @@ from lstm_predictor import LSTMPipeline
 from dqn_recommender import DQNRecommender
 import ai_analyst
 import trend_detector
+import settings_manager
 
 # ---------------------------------------------------------------------------
 # Shared application state
@@ -41,8 +42,9 @@ _ws_clients: Set[WebSocket] = set()
 _alert_last_ts: dict[str, datetime] = {}
 _alert_consec:  dict[str, int]      = {}   # consecutive anomalous tick count
 _alert_top_fault: dict[str, str | None] = {}  # top RF fault during current streak
-ALERT_MIN_CONSECUTIVE  = 10   # ticks of sustained anomaly before alerting (↑ from 5)
-ALERT_COOLDOWN_SECONDS = 600  # min seconds between repeat alerts per location (↑ from 300)
+ALERT_MIN_CONSECUTIVE   = settings_manager.get("alert_min_consecutive",  10)
+ALERT_COOLDOWN_SECONDS  = settings_manager.get("alert_cooldown_seconds", 600)
+ALERT_CRITICAL_RF_GATE  = settings_manager.get("alert_critical_rf_gate", 0.85)
 
 # Fault latch: once RF confidence >= LATCH_THRESHOLD for LATCH_MIN_CONSECUTIVE *consecutive*
 # ticks (same fault class each tick) the detected fault is pinned for that location.
@@ -52,8 +54,8 @@ _latched_fault:  dict[str, str] = {}
 _latch_alerted:  set[str]       = set()   # locations that have had their latch alert fired
 _latch_consec:   dict[str, int] = {}      # consecutive ticks at or above LATCH_THRESHOLD
 _latch_streak:   dict[str, str] = {}      # fault class accumulating toward latch
-LATCH_THRESHOLD     = 0.95   # RF confidence required to count toward latch (↑ from 0.90)
-LATCH_MIN_CONSECUTIVE = 3    # consecutive high-confidence ticks required before latching
+LATCH_THRESHOLD       = settings_manager.get("latch_threshold",       0.95)
+LATCH_MIN_CONSECUTIVE = settings_manager.get("latch_min_consecutive", 3)
 
 
 async def _broadcast(message: dict):
@@ -167,7 +169,7 @@ async def _generation_loop():
                         top_fault, top_prob = max(rf_class.items(), key=lambda x: x[1])
 
                     # Raise CRITICAL bar to 0.85 — RF regularly hits 70%+ on false positives
-                    severity = "CRITICAL" if (top_prob or 0) > 0.85 else "WARNING"
+                    severity = "CRITICAL" if (top_prob or 0) > ALERT_CRITICAL_RF_GATE else "WARNING"
                     db.insert_alert(
                         location_name=location,
                         timestamp=ts,
@@ -300,6 +302,9 @@ async def _generation_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Apply persisted settings to live modules before first tick
+    settings_manager.apply_to_trend_detector(trend_detector)
+    settings_manager.apply_to_dqn(dqn)
     task = asyncio.create_task(_generation_loop())
     yield
     task.cancel()
@@ -329,6 +334,10 @@ def get_config():
         "parameter_nominal_ranges": constants.PARAMETER_NOMINAL_RANGES,
         "parameter_units": constants.PARAMETER_UNITS,
         "faults": list(constants.FAULT_IMPACT_SEVERITY.keys()),
+        "fault_impacts": {
+            fault: list(data["impacts"].keys())
+            for fault, data in constants.FAULT_IMPACT_SEVERITY.items()
+        },
         "actions": constants.ACTIONS_TO_TAKE,
         "fault_precursor_hours": constants.FAULT_PRECURSOR_HOURS,
         "ml_enabled":   ml.enabled,
@@ -775,6 +784,288 @@ async def websocket_live(websocket: WebSocket):
         _ws_clients.discard(websocket)
     except Exception:
         _ws_clients.discard(websocket)
+
+
+# ---------------------------------------------------------------------------
+# Auth + Settings
+# ---------------------------------------------------------------------------
+
+import secrets as _secrets
+from datetime import timedelta
+from jose import jwt as _jwt, JWTError
+
+_JWT_SECRET   = _secrets.token_hex(32)   # regenerated each restart — all sessions invalidate on restart
+_JWT_ALG      = "HS256"
+_JWT_TTL_MIN  = 30
+_REVOKED_JTIS: set[str] = set()
+
+
+def _make_token() -> str:
+    jti = _secrets.token_hex(16)
+    payload = {
+        "sub": "admin",
+        "jti": jti,
+        "exp": datetime.utcnow() + timedelta(minutes=_JWT_TTL_MIN),
+    }
+    return _jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALG)
+
+
+def _verify_token(token: str) -> bool:
+    try:
+        payload = _jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALG])
+        return payload.get("jti") not in _REVOKED_JTIS
+    except JWTError:
+        return False
+
+
+def _require_auth(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or not _verify_token(auth[7:]):
+        raise HTTPException(401, "Unauthorized")
+
+
+class LoginRequest(BaseModel):
+    password: str
+
+class PasswordChangeRequest(BaseModel):
+    current: str
+    new_password: str
+
+class SettingsUpdateRequest(BaseModel):
+    updates: dict
+
+class ExportedClearRequest(BaseModel):
+    max_id: int
+
+
+@app.post("/api/auth/login")
+def auth_login(req: LoginRequest):
+    if not settings_manager.verify_password(req.password):
+        raise HTTPException(401, "Invalid password")
+    return {"token": _make_token(), "ttl_minutes": _JWT_TTL_MIN}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            payload = _jwt.decode(auth[7:], _JWT_SECRET, algorithms=[_JWT_ALG])
+            _REVOKED_JTIS.add(payload["jti"])
+        except JWTError:
+            pass
+    return {"status": "ok"}
+
+
+@app.get("/api/settings")
+def get_settings(request: Request):
+    _require_auth(request)
+    s = dict(settings_manager._settings)
+    # Never expose sensitive values to the frontend
+    s.pop("password_hash", None)
+    s["groq_key_set"] = bool(s.pop("groq_api_key_enc", None))
+    return s
+
+
+@app.patch("/api/settings/alerts")
+def save_alert_settings(req: SettingsUpdateRequest, request: Request):
+    _require_auth(request)
+    allowed = {"alert_min_consecutive", "alert_cooldown_seconds",
+               "alert_critical_rf_gate", "latch_threshold",
+               "latch_min_consecutive", "dqn_rf_bypass_threshold"}
+    filtered = {k: v for k, v in req.updates.items() if k in allowed}
+    settings_manager.set_and_save(filtered)
+    # Hot-reload into running module vars
+    import sys
+    settings_manager.apply_to_main(sys.modules[__name__])
+    settings_manager.apply_to_dqn(dqn)
+    return {"status": "ok"}
+
+
+@app.patch("/api/settings/trends")
+def save_trend_settings(req: SettingsUpdateRequest, request: Request):
+    _require_auth(request)
+    allowed = {"mk_p_threshold", "mk_tau_advisory", "mk_tau_warning",
+               "slope_magnitude_gate", "cusum_threshold", "cusum_baseline_pct",
+               "zscore_threshold", "zscore_single_threshold", "zscore_window"}
+    filtered = {k: v for k, v in req.updates.items() if k in allowed}
+    settings_manager.set_and_save(filtered)
+    settings_manager.apply_to_trend_detector(trend_detector)
+    return {"status": "ok"}
+
+
+@app.patch("/api/settings/generation")
+def save_generation_settings(req: SettingsUpdateRequest, request: Request):
+    _require_auth(request)
+    allowed = {"tick_interval_seconds", "noise_scale",
+               "crew_event_frequency", "fault_injection_enabled"}
+    filtered = {k: v for k, v in req.updates.items() if k in allowed}
+    settings_manager.set_and_save(filtered)
+    return {"status": "ok"}
+
+
+@app.patch("/api/settings/display")
+def save_display_settings(req: SettingsUpdateRequest, request: Request):
+    _require_auth(request)
+    allowed = {"mission_start_iso", "dashboard_refresh_ms",
+               "chat_max_stored", "trends_default_n", "detail_default_n"}
+    filtered = {k: v for k, v in req.updates.items() if k in allowed}
+    settings_manager.set_and_save(filtered)
+    return {"status": "ok"}
+
+
+@app.patch("/api/settings/integrations/groq")
+def save_groq_key(req: SettingsUpdateRequest, request: Request):
+    _require_auth(request)
+    key = req.updates.get("groq_api_key", "").strip()
+    settings_manager.set_groq_key(key if key else None)
+    if key:
+        import os
+        os.environ["GROQ_API_KEY"] = key
+    elif "GROQ_API_KEY" in os.environ:
+        del os.environ["GROQ_API_KEY"]
+    return {"status": "ok"}
+
+
+@app.post("/api/settings/integrations/groq/test")
+def test_groq_key(request: Request):
+    _require_auth(request)
+    key = settings_manager.get_groq_key()
+    if not key:
+        return {"ok": False, "error": "No key stored"}
+    try:
+        from groq import Groq
+        client = Groq(api_key=key)
+        client.models.list()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/settings/security/change-password")
+def change_password(req: PasswordChangeRequest, request: Request):
+    _require_auth(request)
+    if not settings_manager.change_password(req.current, req.new_password):
+        raise HTTPException(400, "Current password incorrect")
+    return {"status": "ok"}
+
+
+@app.post("/api/settings/security/revoke-all")
+def revoke_all_sessions(request: Request):
+    _require_auth(request)
+    global _JWT_SECRET
+    _JWT_SECRET = _secrets.token_hex(32)
+    _REVOKED_JTIS.clear()
+    return {"status": "ok"}
+
+
+@app.get("/api/settings/ml/status")
+def ml_model_status(request: Request):
+    _require_auth(request)
+    import sklearn
+    return {
+        "sklearn_version": sklearn.__version__,
+        "ml_enabled":   ml.enabled,
+        "lstm_enabled": lstm.enabled,
+        "dqn_enabled":  dqn.enabled,
+    }
+
+
+@app.delete("/api/settings/data/sensor")
+def clear_sensor_data_settings(request: Request):
+    _require_auth(request)
+    db.clear_data()
+    lstm.clear_buffer()
+    return {"status": "ok"}
+
+
+@app.delete("/api/settings/data/alerts")
+def clear_alert_data(request: Request):
+    _require_auth(request)
+    db.clear_alerts()
+    return {"status": "ok"}
+
+
+@app.delete("/api/settings/data/faults")
+def clear_fault_data_settings(request: Request):
+    _require_auth(request)
+    global _latched_fault, _latch_alerted, _latch_consec, _latch_streak
+    global _alert_consec, _alert_last_ts, _alert_top_fault
+    _latched_fault  = {}
+    _latch_alerted  = set()
+    _latch_consec   = {}
+    _latch_streak   = {}
+    _alert_consec   = {}
+    _alert_last_ts  = {}
+    _alert_top_fault = {}
+    return {"status": "ok"}
+
+
+@app.delete("/api/settings/data/lstm")
+def clear_lstm_buffers(request: Request):
+    _require_auth(request)
+    lstm.clear_buffer()
+    return {"status": "ok"}
+
+
+@app.get("/api/settings/data/export/csv")
+def export_sensor_csv(request: Request):
+    _require_auth(request)
+    watermark = db.get_export_max_id() or 0
+    row_count = db.get_row_count_up_to(watermark) if watermark else 0
+
+    def _generate():
+        yield "id,timestamp,location,parameter,value,is_anomalous,rf_prediction,rf_confidence\n"
+        if watermark == 0:
+            return
+        import sqlite3 as _sq
+        conn = _sq.connect(db.db_path, check_same_thread=False)
+        conn.row_factory = _sq.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            cursor = conn.execute(
+                """SELECT gd.id, gd.timestamp, l.location_name, gd.data,
+                          al.isolation_forest_label,
+                          al.random_forest_classification
+                   FROM generated_data gd
+                   JOIN locations l ON l.id = gd.location_id
+                   LEFT JOIN anomaly_labels al ON al.data_row_id = gd.id
+                   WHERE gd.id <= ?
+                   ORDER BY gd.id""",
+                (watermark,),
+            )
+            for row in cursor:
+                data_dict = json.loads(row["data"])
+                is_anom = row["isolation_forest_label"] == -1 \
+                    if row["isolation_forest_label"] is not None else False
+                rf_raw = json.loads(row["random_forest_classification"] or "null")
+                rf_pred = rf_raw.get("prediction", "") if isinstance(rf_raw, dict) else ""
+                rf_conf = rf_raw.get("confidence", "") if isinstance(rf_raw, dict) else ""
+                loc = row["location_name"].replace('"', '""')
+                ts  = str(row["timestamp"]).replace('"', '""')
+                for param, value in data_dict.items():
+                    p = param.replace('"', '""')
+                    yield f'{row["id"]},"{ts}","{loc}","{p}",{value},{is_anom},"{rf_pred}",{rf_conf}\n'
+        finally:
+            conn.close()
+
+    fname = f"aura_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "X-Export-Max-Id":    str(watermark),
+        "X-Export-Row-Count": str(row_count),
+        "Access-Control-Expose-Headers": "X-Export-Max-Id, X-Export-Row-Count",
+    }
+    return StreamingResponse(_generate(), media_type="text/csv", headers=headers)
+
+
+@app.delete("/api/settings/data/exported")
+def clear_exported_data(req: ExportedClearRequest, request: Request):
+    _require_auth(request)
+    deleted = db.clear_exported_data(req.max_id)
+    if db.get_export_max_id() is None:
+        lstm.clear_buffer()
+    return {"deleted_rows": deleted}
 
 
 # ---------------------------------------------------------------------------

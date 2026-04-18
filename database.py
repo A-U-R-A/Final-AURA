@@ -173,6 +173,28 @@ class Database:
             )
             conn.commit()
 
+    def get_export_max_id(self) -> int | None:
+        with self._connect() as conn:
+            return conn.execute("SELECT MAX(id) FROM generated_data").fetchone()[0]
+
+    def get_row_count_up_to(self, max_id: int) -> int:
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM generated_data WHERE id <= ?", (max_id,)
+            ).fetchone()[0]
+
+    def clear_exported_data(self, max_id: int) -> int:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM anomaly_labels WHERE data_row_id IN "
+                "(SELECT id FROM generated_data WHERE id <= ?)", (max_id,)
+            )
+            cur = conn.execute(
+                "DELETE FROM generated_data WHERE id <= ?", (max_id,)
+            )
+            conn.commit()
+            return cur.rowcount
+
     def clear_data(self):
         with self._connect() as conn:
             conn.executescript(
