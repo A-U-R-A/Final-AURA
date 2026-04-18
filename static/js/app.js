@@ -13,12 +13,17 @@ const state = {
   config: null,                // /api/config payload (locations, ranges, units, etc.)
   locationStates: {},          // {location: {is_anomalous, active_fault, latched}}
   dqnRecs: {},                 // {location: {action, action_index, confidence}} — from WS ticks
+  lstmRecs: {},                // {location: {failure_prob, rul_hours}} — from WS ticks
   locationData: {},            // {location: {param: value}} — latest sensor readings
   ws: null,                    // active WebSocket instance
   wsConnected: false,
   activePage: "twin",          // currently visible tab
-  detailChart: null,           // Chart.js instance on the Detail page (destroyed on each load)
-  detailLive: true,            // whether live WS ticks push new points to the detail chart
+  detailChart: null,           // Chart.js instance in the drilldown view (destroyed on each load)
+  detailLive: true,            // whether live WS ticks push new points to the drilldown chart
+  detailMiniCharts: {},        // {param: Chart instance} — sparklines in overview grid
+  detailDrillParam: null,      // param currently open in drilldown (null = overview mode)
+  detailPendingDrill: null,    // param to drill into after overview finishes loading
+  detailAnomalyFlags: [],      // bool[] parallel to drilldown chart data — true = IF anomalous
 };
 
 // ── DOM references ───────────────────────────────────────────────────────────
@@ -64,6 +69,7 @@ function setupTabs() {
       $(`page-${page}`).classList.add("active");
       state.activePage = page;
       if (page === "dashboard") refreshDashboard();
+      if (page === "detail")    loadDetailOverview();
       if (page === "trends")    refreshTrends();
       if (page === "alerts")    refreshAlerts();
       if (page === "analyst")     refreshAnalystLabels();
@@ -100,7 +106,6 @@ function populateSelects() {
   // Detail
   populateSelect("detail-location", locations);
   $("detail-location").addEventListener("change", onDetailLocationChange);
-  onDetailLocationChange();  // populate parameters
 
   // Trends
   populateSelect("trends-location", locations);
@@ -187,7 +192,8 @@ function handleWsMessage(msg) {
   } else if (msg.type === "tick") {
     // Cache latest sensor readings and DQN recommendation for this location
     if (msg.data) state.locationData[msg.location] = msg.data;
-    if (msg.dqn)  state.dqnRecs[msg.location] = msg.dqn;
+    if (msg.dqn)  state.dqnRecs[msg.location]  = msg.dqn;
+    if (msg.lstm) state.lstmRecs[msg.location] = msg.lstm;
     // Merge fault/anomaly state so dashboard cards stay accurate without waiting for "state"
     if (!state.locationStates[msg.location]) state.locationStates[msg.location] = {};
     state.locationStates[msg.location].active_fault = msg.active_fault || null;
@@ -196,14 +202,43 @@ function handleWsMessage(msg) {
     // Only update dashboard cards in-place when the dashboard is visible — avoids
     // touching the DOM for pages the user isn't looking at
     if (state.activePage === "dashboard") {
-      updateLocationCardInPlace(msg.location, msg.data, msg.dqn, msg.if_label);
+      updateLocationCardInPlace(msg.location, msg.data, msg.dqn, msg.lstm, msg.if_label);
     }
-    // Push new point to the live-detail chart if the selected location + param match
-    if (state.activePage === "detail" && state.detailLive) {
+    // Update detail page live — mini-chart sparklines in overview, or drilldown chart
+    if (state.activePage === "detail" && state.detailLive && msg.data) {
       const loc = $("detail-location").value;
-      const param = $("detail-parameter").value;
-      if (msg.location === loc && msg.data && param in msg.data) {
-        pushDetailPoint(msg.timestamp, msg.data[param], msg.if_label === -1);
+      if (msg.location === loc) {
+        // Update every sparkline that has data for this tick
+        Object.entries(msg.data).forEach(([param, value]) => {
+          const chart = state.detailMiniCharts[param];
+          if (!chart) return;
+          const label = msg.timestamp.split("T")[1].split(".")[0];
+          chart.data.labels.push(label);
+          chart.data.datasets[0].data.push(value);
+          if (chart.data.labels.length > 50) {
+            chart.data.labels.shift();
+            chart.data.datasets[0].data.shift();
+          }
+          chart.update("none");
+          // Refresh the value label on the card
+          const safeId = `mini-chart-${param.replace(/[^a-zA-Z0-9]/g, "_")}`;
+          const canvas = document.getElementById(safeId);
+          if (canvas) {
+            const valEl = canvas.closest(".detail-mini-card")?.querySelector(".detail-mini-val");
+            if (valEl) {
+              const range = state.config.parameter_nominal_ranges[param];
+              const unit  = state.config.parameter_units[param] || "";
+              const isOut = range && (value < range[0] || value > range[1]);
+              valEl.textContent = formatVal(value, param) + "\u00a0" + unit;
+              valEl.className = `detail-mini-val${isOut ? " anomalous" : ""}`;
+            }
+          }
+        });
+        // Also push to the drilldown chart if one is open
+        const drillParam = state.detailDrillParam;
+        if (drillParam && drillParam in msg.data) {
+          pushDetailPoint(msg.timestamp, msg.data[drillParam], msg.if_label === -1);
+        }
       }
     }
     // Prepend to the anomaly labels sidebar in the Analyst page
@@ -268,7 +303,6 @@ function buildDigitalTwin() {
     if (typeof window.twinInit === "function") {
       window.twinInit(container, loc => {
         $("detail-location").value = loc;
-        onDetailLocationChange();
         document.querySelector('.tab[data-page="detail"]').click();
       });
       // Push current state immediately if already loaded
@@ -312,7 +346,6 @@ function updateLocationList() {
     `;
     item.addEventListener("click", () => {
       $("detail-location").value = loc;
-      onDetailLocationChange();
       document.querySelector('.tab[data-page="detail"]').click();
     });
     list.appendChild(item);
@@ -424,10 +457,20 @@ function _sensorBarInfo(raw, range) {
   return { pct, barCls: "bar-nominal", valCls: "nominal" };
 }
 
+function _lstmStatusInfo(lstm) {
+  if (!lstm) return { label: "—", cls: "muted" };
+  const p = lstm.failure_prob;
+  if (p < 0.25) return { label: "NOMINAL", cls: "nominal" };
+  if (p < 0.50) return { label: "WATCH",   cls: "warning" };
+  if (p < 0.75) return { label: "CAUTION", cls: "warning" };
+  return             { label: "CRITICAL", cls: "critical" };
+}
+
 function makeLocationCard(loc) {
   const locState  = state.locationStates[loc] || {};
   const sensorData = state.locationData[loc]  || {};
   const dqnRec    = state.dqnRecs[loc];
+  const lstmRec   = state.lstmRecs[loc];
   const { parameter_nominal_ranges, parameter_units } = state.config;
 
   const activeFault = locState.active_fault;
@@ -456,6 +499,8 @@ function makeLocationCard(loc) {
     const cls    = isNoop ? "nominal" : dqnRec.confidence >= 0.7 ? "critical" : "warning";
     dqnHtml = `<span class="loc-dqn ${cls}">DQN: ${dqnRec.action} (${conf}%)</span>`;
   }
+  const { label: lstmLabel, cls: lstmCls } = _lstmStatusInfo(lstmRec);
+  const lstmHtml = `<span class="loc-lstm ${lstmCls}">LSTM: ${lstmLabel}</span>`;
 
   const isLatched = !!(locState.latched);
   const faultHtml = activeFault
@@ -478,15 +523,13 @@ function makeLocationCard(loc) {
     </div>
     ${faultHtml}
     <div class="loc-card-sensors">${sensorRowsHtml}</div>
-    <div class="loc-card-footer">${dqnHtml}</div>
+    <div class="loc-card-footer">${dqnHtml}${lstmHtml}</div>
   `;
 
   card.addEventListener("click", (e) => {
     if (e.target.classList.contains("resolve-latch-btn")) return;
     $("detail-location").value = loc;
-    onDetailLocationChange();
     document.querySelector('.tab[data-page="detail"]').click();
-    loadDetailChart();
   });
 
   const resolveBtn = card.querySelector(".resolve-latch-btn");
@@ -507,7 +550,7 @@ function makeLocationCard(loc) {
   return card;
 }
 
-function updateLocationCardInPlace(loc, sensorData, dqnRec, ifLabel) {
+function updateLocationCardInPlace(loc, sensorData, dqnRec, lstmRec, ifLabel) {
   const cardId = `loc-card-${loc.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "")}`;
   const card = document.getElementById(cardId);
   if (!card) return;
@@ -583,31 +626,34 @@ function updateLocationCardInPlace(loc, sensorData, dqnRec, ifLabel) {
       dqnEl.textContent = `DQN: ${dqnRec.action} (${conf}%)`;
     }
   }
+
+  // Update LSTM status
+  if (lstmRec) {
+    const lstmEl = card.querySelector(".loc-lstm");
+    if (lstmEl) {
+      const { label, cls } = _lstmStatusInfo(lstmRec);
+      lstmEl.className = `loc-lstm ${cls}`;
+      lstmEl.textContent = `LSTM: ${label}`;
+    }
+  }
 }
 
 // ============================================================
 //  DETAIL PAGE
 // ============================================================
 function onDetailLocationChange() {
-  const loc = $("detail-location").value;
-  const paramSel = $("detail-parameter");
-  const allParams = Object.values(state.config.subsystem_parameters).flat();
-  paramSel.innerHTML = "";
-  allParams.forEach(p => {
-    const opt = document.createElement("option");
-    opt.value = p;
-    opt.textContent = p;
-    paramSel.appendChild(opt);
-  });
+  closeDetailDrilldown();
+  loadDetailOverview();
 }
 
 function buildDetail() {
-  $("btn-detail-load").addEventListener("click", loadDetailChart);
+  $("btn-detail-back").addEventListener("click", closeDetailDrilldown);
+  $("btn-detail-reload").addEventListener("click", loadDetailChart);
   $("detail-live").addEventListener("change", e => {
     state.detailLive = e.target.checked;
   });
 
-  // Register custom interaction mode for chart hover tolerance
+  // Register custom interaction mode for drilldown chart hover tolerance
   const Interaction = Chart.Interaction;
   Interaction.modes.customTolerance = function(chart, e, options, useFinalPosition) {
     const position = Chart.helpers.getRelativePosition(e, chart);
@@ -630,15 +676,132 @@ function buildDetail() {
   };
 }
 
+async function loadDetailOverview() {
+  const loc = $("detail-location").value;
+  if (!loc) return;
+
+  const grid = $("detail-mini-grid");
+  grid.innerHTML = '<div class="loading">Loading…</div>';
+
+  // Destroy existing sparklines before rebuilding
+  Object.values(state.detailMiniCharts).forEach(c => c.destroy());
+  state.detailMiniCharts = {};
+
+  const allParams = Object.values(state.config.subsystem_parameters).flat();
+
+  const results = await Promise.allSettled(
+    allParams.map(p =>
+      apiFetch(`/api/location/${encodeURIComponent(loc)}/history?parameter=${encodeURIComponent(p)}&n=50`)
+    )
+  );
+
+  grid.innerHTML = "";
+  allParams.forEach((param, i) => {
+    const history = results[i].status === "fulfilled" ? results[i].value : [];
+    grid.appendChild(buildMiniCard(param, history));
+  });
+
+  // Status badge
+  const locState = state.locationStates[loc] || {};
+  const statusEl = $("detail-ov-status");
+  if (locState.active_fault) {
+    statusEl.textContent = `⚠ ${locState.active_fault}`;
+    statusEl.className = "detail-ov-status fault";
+  } else if (locState.is_anomalous) {
+    statusEl.textContent = "ANOMALOUS";
+    statusEl.className = "detail-ov-status anomalous";
+  } else {
+    statusEl.textContent = "NOMINAL";
+    statusEl.className = "detail-ov-status nominal";
+  }
+
+  // Open drilldown if a caller queued one before overview was loaded
+  if (state.detailPendingDrill) {
+    const p = state.detailPendingDrill;
+    state.detailPendingDrill = null;
+    openDetailDrilldown(p);
+  }
+}
+
+function buildMiniCard(param, history) {
+  const range = state.config.parameter_nominal_ranges[param];
+  const unit  = state.config.parameter_units[param] || "";
+  const latestVal = history.length ? history[history.length - 1].value : null;
+  const isOut = range && latestVal !== null && (latestVal < range[0] || latestVal > range[1]);
+
+  const card = document.createElement("div");
+  card.className = `detail-mini-card${isOut ? " out-of-range" : ""}`;
+  const safeId = `mini-chart-${param.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  card.innerHTML = `
+    <div class="detail-mini-header">
+      <span class="detail-mini-name">${param}</span>
+      <span class="detail-mini-val${isOut ? " anomalous" : ""}">${latestVal !== null ? formatVal(latestVal, param) + "\u00a0" + unit : "—"}</span>
+    </div>
+    <div class="detail-mini-chart-wrap"><canvas id="${safeId}"></canvas></div>
+  `;
+  card.addEventListener("click", () => openDetailDrilldown(param));
+
+  // Build sparkline after card is in DOM (need canvas reachable)
+  setTimeout(() => {
+    const canvas = document.getElementById(safeId);
+    if (!canvas) return;
+    const labels = history.map(r => r.timestamp.split("T")[1].split(".")[0]);
+    const values = history.map(r => r.value);
+    const color  = isOut ? "#ff5252" : "#00e676";
+    const chart  = new Chart(canvas.getContext("2d"), {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          borderColor: color,
+          backgroundColor: isOut ? "rgba(255,82,82,.08)" : "rgba(0,230,118,.06)",
+          borderWidth: 1,
+          pointRadius: 0,
+          tension: 0.3,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        scales: { x: { display: false }, y: { display: false } },
+      },
+    });
+    state.detailMiniCharts[param] = chart;
+  }, 0);
+
+  return card;
+}
+
+function openDetailDrilldown(param) {
+  state.detailDrillParam = param;
+  $("detail-parameter").value = param;
+  const loc = $("detail-location").value;
+  $("detail-dd-title").textContent = `${loc} — ${param}`;
+  $("detail-overview").classList.add("hidden");
+  $("detail-drilldown").classList.remove("hidden");
+  loadDetailChart();
+}
+
+function closeDetailDrilldown() {
+  state.detailDrillParam = null;
+  state.detailAnomalyFlags = [];
+  $("detail-drilldown").classList.add("hidden");
+  $("detail-overview").classList.remove("hidden");
+}
+
 async function loadDetailChart() {
   const loc   = $("detail-location").value;
-  const param = $("detail-parameter").value;
+  const param = state.detailDrillParam;
   const n     = parseInt($("detail-n").value, 10);
+  if (!param) return;
 
   let history;
   try {
     history = await apiFetch(
-      `/api/location/${encodeURIComponent(loc)}/history/${encodeURIComponent(param)}?n=${n}`
+      `/api/location/${encodeURIComponent(loc)}/history?parameter=${encodeURIComponent(param)}&n=${n}`
     );
   } catch (e) {
     showToast(`Error loading history: ${e.message}`, "error");
@@ -648,17 +811,20 @@ async function loadDetailChart() {
   const labels = history.map(r => r.timestamp.split("T")[1].split(".")[0]);
   const values = history.map(r => r.value);
 
+  // Maintain a parallel bool array — callback reads it fresh each render, never gets out of sync
+  state.detailAnomalyFlags = history.map(r => !!r.anomalous);
+
   $("detail-table-param-header").textContent = param;
 
-  // Nominal range bands
   const range = state.config.parameter_nominal_ranges[param];
   const unit  = state.config.parameter_units[param] || "";
 
-  const ctx = $("detail-chart").getContext("2d");
+  const ptColor = ctx => state.detailAnomalyFlags[ctx.dataIndex] ? "#ff3d40" : "#00e676";
 
+  const ctx2d = $("detail-chart").getContext("2d");
   if (state.detailChart) state.detailChart.destroy();
 
-  state.detailChart = new Chart(ctx, {
+  state.detailChart = new Chart(ctx2d, {
     type: "line",
     data: {
       labels,
@@ -669,8 +835,10 @@ async function loadDetailChart() {
           borderColor: "#00e676",
           backgroundColor: "rgba(0,230,118,.08)",
           borderWidth: 1.5,
-          pointRadius: 2,
-          pointHoverRadius: 4,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          pointBackgroundColor: ptColor,
+          pointBorderColor: ptColor,
           tension: 0.2,
         },
         range && {
@@ -698,19 +866,22 @@ async function loadDetailChart() {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      interaction: {
-        mode: "customTolerance",
-        radius: 5,
-      },
+      interaction: { mode: "customTolerance", radius: 5 },
       plugins: {
-        legend: {
-          labels: { color: "#8499ac", font: { size: 10 } },
+        legend: { labels: { color: "#8499ac", font: { size: 10 } } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const r = history[ctx.dataIndex];
+              const flag = r && r.anomalous ? " ⚠ ANOMALOUS" : "";
+              return ` ${formatVal(ctx.parsed.y, param)} ${unit}${flag}`;
+            },
+          },
         },
       },
-
       scales: {
         x: {
-          ticks: { color: "#546478", maxTicksLimit: 10, font: { size: 10 } },
+          ticks: { color: "#546478", maxTicksLimit: 12, font: { size: 10 } },
           grid: { color: "rgba(30,45,66,.8)" },
         },
         y: {
@@ -718,21 +889,22 @@ async function loadDetailChart() {
           grid: { color: "rgba(30,45,66,.8)" },
         },
       },
-    }
+    },
   });
 
-  // Populate table
+  // Populate table — newest first, anomalous rows highlighted
   const tbody = $("detail-table-body");
   tbody.innerHTML = "";
-  history.forEach(r => {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const r  = history[i];
     const tr = document.createElement("tr");
-    const isOut = range && (r.value < range[0] || r.value > range[1]);
+    if (r.anomalous) tr.classList.add("anomalous-row");
     tr.innerHTML = `
       <td>${r.timestamp}</td>
-      <td class="${isOut ? "anomalous" : ""}">${formatVal(r.value, param)}</td>
+      <td class="${r.anomalous ? "anomalous" : ""}">${formatVal(r.value, param)}${r.anomalous ? ' <span class="anom-badge">⚠</span>' : ""}</td>
     `;
-    tbody.insertBefore(tr, tbody.firstChild);
-  });
+    tbody.appendChild(tr);
+  }
 }
 
 // Append one live point to the running detail chart and table.
@@ -748,6 +920,7 @@ function pushDetailPoint(timestamp, value, isAnomalous) {
 
   chart.data.labels.push(label);
   chart.data.datasets[0].data.push(value);
+  state.detailAnomalyFlags.push(isAnomalous);
 
   // Extend nominal band datasets by repeating their constant value
   chart.data.datasets.slice(1).forEach(ds => {
@@ -758,6 +931,7 @@ function pushDetailPoint(timestamp, value, isAnomalous) {
   if (chart.data.labels.length > maxPoints) {
     chart.data.labels.shift();
     chart.data.datasets.forEach(ds => ds.data.shift());
+    state.detailAnomalyFlags.shift();
   }
 
   chart.update("none");   // skip animation for smooth live streaming
@@ -767,7 +941,7 @@ function pushDetailPoint(timestamp, value, isAnomalous) {
   const tr = document.createElement("tr");
   tr.innerHTML = `
     <td>${timestamp}</td>
-    <td class="${isAnomalous ? "anomalous" : ""}">${formatVal(value, $("detail-parameter").value)}</td>
+    <td class="${isAnomalous ? "anomalous" : ""}">${formatVal(value, state.detailDrillParam || "")}</td>
   `;
   tbody.insertBefore(tr, tbody.firstChild);
   if (tbody.rows.length > maxPoints) tbody.deleteRow(tbody.rows.length - 1);
@@ -779,6 +953,25 @@ function pushDetailPoint(timestamp, value, isAnomalous) {
 
 let _chatHistory   = [];   // [{role, content}]
 let _chatStreaming  = false;
+
+const _CHAT_STORAGE_KEY = "aura_chat_v1";
+const _CHAT_MAX_STORED  = 40;   // messages (20 turns)
+
+function _saveChatHistory() {
+  try {
+    const trimmed = _chatHistory.slice(-_CHAT_MAX_STORED);
+    localStorage.setItem(_CHAT_STORAGE_KEY, JSON.stringify(trimmed));
+  } catch (_) {}
+}
+
+function _loadChatHistory() {
+  try {
+    const raw = localStorage.getItem(_CHAT_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (_) {
+    return [];
+  }
+}
 
 function buildAnalyst() {
   // Prepend "All Locations" option to the location select
@@ -804,6 +997,13 @@ function buildAnalyst() {
     }
   });
   input.addEventListener("input", _resizeChatInput);
+
+  // Restore previous session from localStorage
+  const saved = _loadChatHistory();
+  if (saved.length) {
+    _chatHistory = saved;
+    saved.forEach(m => _appendMessage(m.role === "user" ? "user" : "ai", m.content));
+  }
 
   // Fetch backend status once on page load
   _refreshBackendBadge();
@@ -831,6 +1031,7 @@ function _updateBackendBadge(backend) {
 // ── Chat helpers ─────────────────────────────────────────────────────────────
 function _clearChat() {
   _chatHistory = [];
+  try { localStorage.removeItem(_CHAT_STORAGE_KEY); } catch (_) {}
   const msgs = $("chat-messages");
   msgs.innerHTML = "";
   const welcome = document.createElement("div");
@@ -950,6 +1151,7 @@ async function _sendChatMessage() {
 
     if (aiText) {
       _chatHistory.push({ role: "assistant", content: aiText });
+      _saveChatHistory();
     }
   } catch (e) {
     contentEl.innerHTML = `<span class="chat-error">Error: ${_escHtml(e.message)}</span>`;
@@ -1145,9 +1347,8 @@ async function refreshTrends() {
 
       card.addEventListener("click", () => {
         $("detail-location").value = location;
-        $("detail-parameter").value = t.param;
+        state.detailPendingDrill = t.param;
         document.querySelector('.tab[data-page="detail"]').click();
-        loadDetailChart();
       });
 
       grid.appendChild(card);

@@ -351,7 +351,7 @@ def get_latest(location_name: str):
     return db.get_latest_reading(location_name)
 
 
-@app.get("/api/location/{location_name}/history/{parameter}")
+@app.get("/api/location/{location_name}/history")
 def get_history(location_name: str, parameter: str, n: int = 50):
     """Last n readings for a specific parameter at a location."""
     if location_name not in constants.LOCATIONS:

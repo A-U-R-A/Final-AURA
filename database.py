@@ -249,13 +249,15 @@ class Database:
         }
 
     def get_history(self, location_name: str, parameter: str, n: int = 50) -> list:
-        """Return last n [timestamp, value] pairs for a parameter at a location."""
+        """Return last n readings for a parameter, including the IF anomaly label for table highlighting."""
         with self._connect() as conn:
             loc_id = self._location_id(conn, location_name)
             rows = conn.execute(
-                """SELECT timestamp, data FROM generated_data
-                   WHERE location_id = ?
-                   ORDER BY timestamp DESC LIMIT ?""",
+                """SELECT gd.timestamp, gd.data, al.isolation_forest_label
+                   FROM generated_data gd
+                   LEFT JOIN anomaly_labels al ON al.data_row_id = gd.id
+                   WHERE gd.location_id = ?
+                   ORDER BY gd.timestamp DESC LIMIT ?""",
                 (loc_id, n),
             ).fetchall()
         results = []
@@ -263,7 +265,11 @@ class Database:
             try:
                 d = json.loads(r["data"])
                 if parameter in d:
-                    results.append({"timestamp": r["timestamp"], "value": d[parameter]})
+                    results.append({
+                        "timestamp": r["timestamp"],
+                        "value": d[parameter],
+                        "anomalous": r["isolation_forest_label"] == -1,
+                    })
             except Exception:
                 continue
         return results

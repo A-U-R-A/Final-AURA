@@ -91,38 +91,53 @@
 
   <!-- ── SENSOR DETAIL ─────────────────────────────────────────────── -->
   <section class="page" id="page-detail">
-    <div class="detail-controls">
-      <div class="control-group">
-        <label>Location</label>
-        <select id="detail-location"></select>
+
+    <!-- OVERVIEW MODE -->
+    <div id="detail-overview" class="detail-overview">
+      <div class="detail-ov-header">
+        <div class="control-group" style="margin:0">
+          <label>Location</label>
+          <select id="detail-location"></select>
+        </div>
+        <!-- hidden: keeps compatibility with drilldown callers that set this value -->
+        <select id="detail-parameter" style="display:none"></select>
+        <span id="detail-ov-status" class="detail-ov-status"></span>
       </div>
-      <div class="control-group">
-        <label>Parameter</label>
-        <select id="detail-parameter"></select>
+      <div id="detail-mini-grid" class="detail-mini-grid">
+        <div class="loading">Select a location to view sensor data.</div>
       </div>
-      <div class="control-group">
-        <label>Points</label>
-        <select id="detail-n">
-          <option value="50" selected>50</option>
-          <option value="100">100</option>
-          <option value="200">200</option>
-        </select>
+    </div>
+
+    <!-- DRILLDOWN MODE (hidden by default) -->
+    <div id="detail-drilldown" class="detail-drilldown hidden">
+      <div class="detail-dd-header">
+        <button class="btn btn-ghost btn-sm" id="btn-detail-back">← Overview</button>
+        <span id="detail-dd-title" class="detail-dd-title">—</span>
+        <div class="detail-dd-controls">
+          <select id="detail-n">
+            <option value="100" selected>100 pts</option>
+            <option value="200">200 pts</option>
+            <option value="400">400 pts</option>
+            <option value="1000">1000 pts</option>
+          </select>
+          <button class="btn btn-primary btn-sm" id="btn-detail-reload">Reload</button>
+          <label class="checkbox-label">
+            <input type="checkbox" id="detail-live" checked />
+            Live
+          </label>
+        </div>
       </div>
-      <button class="btn btn-primary" id="btn-detail-load">Load</button>
-      <label class="checkbox-label">
-        <input type="checkbox" id="detail-live" checked />
-        Live
-      </label>
+      <div class="detail-chart-card">
+        <canvas id="detail-chart"></canvas>
+      </div>
+      <div class="detail-table-wrap">
+        <table id="detail-table" class="data-table">
+          <thead><tr><th>Timestamp</th><th id="detail-table-param-header">Value</th></tr></thead>
+          <tbody id="detail-table-body"></tbody>
+        </table>
+      </div>
     </div>
-    <div class="detail-chart-card">
-      <canvas id="detail-chart"></canvas>
-    </div>
-    <div class="detail-table-wrap">
-      <table id="detail-table" class="data-table">
-        <thead><tr><th>Timestamp</th><th id="detail-table-param-header">Value</th></tr></thead>
-        <tbody id="detail-table-body"></tbody>
-      </table>
-    </div>
+
   </section>
 
   <!-- ── TRENDS ───────────────────────────────────────────────────── -->
