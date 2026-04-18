@@ -17,8 +17,8 @@ import joblib
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix
-import constants
-from data_generator import SensorDataGenerator
+from app import constants
+from app.data_generator import SensorDataGenerator
 
 # ── Config ────────────────────────────────────────────────────────────────────
 N_NOMINAL      = 20_000  # training samples (all healthy) — larger = tighter boundary

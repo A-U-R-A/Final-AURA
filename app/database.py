@@ -3,7 +3,7 @@ import json
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-import constants
+from . import constants
 
 
 class Database:
@@ -34,6 +34,7 @@ class Database:
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA foreign_keys=ON")
         try:
             yield conn
@@ -191,6 +192,24 @@ class Database:
             )
             cur = conn.execute(
                 "DELETE FROM generated_data WHERE id <= ?", (max_id,)
+            )
+            conn.commit()
+            return cur.rowcount
+
+    def prune_old_rows(self, max_rows: int) -> int:
+        """Delete the oldest rows so total stays at or below max_rows. Returns rows deleted."""
+        with self._connect() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM generated_data").fetchone()[0]
+            if count <= max_rows:
+                return 0
+            to_delete = count - max_rows
+            conn.execute(
+                "DELETE FROM anomaly_labels WHERE data_row_id IN "
+                "(SELECT id FROM generated_data ORDER BY id ASC LIMIT ?)", (to_delete,)
+            )
+            cur = conn.execute(
+                "DELETE FROM generated_data WHERE id IN "
+                "(SELECT id FROM generated_data ORDER BY id ASC LIMIT ?)", (to_delete,)
             )
             conn.commit()
             return cur.rowcount

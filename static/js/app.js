@@ -161,7 +161,8 @@ function connectWebSocket() {
   });
 
   // Keepalive ping every 25 s — avoids idle proxy timeouts
-  setInterval(() => {
+  if (_wsKeepaliveTimer) clearInterval(_wsKeepaliveTimer);
+  _wsKeepaliveTimer = setInterval(() => {
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
       state.ws.send("ping");
     }
@@ -1623,6 +1624,7 @@ function dismissLatchPopup() {
 
 const _SETTINGS_TOKEN_KEY = "aura_settings_token";
 let _exportMaxId = null;
+let _wsKeepaliveTimer = null;
 
 const _SETTINGS_DEFAULTS = {
   // Alerts

@@ -29,9 +29,9 @@ from sklearn.metrics import (
     classification_report, confusion_matrix,
 )
 
-import constants
-from data_generator import SensorDataGenerator
-from lstm_predictor import ECLSSLSTMPredictor, SEQ_LEN, HIDDEN_SIZE, NUM_LAYERS
+from app import constants
+from app.data_generator import SensorDataGenerator
+from app.lstm_predictor import ECLSSLSTMPredictor, SEQ_LEN, HIDDEN_SIZE, NUM_LAYERS
 
 # -- Pass/fail targets from project plan --------------------------------------
 TARGETS = {
@@ -346,7 +346,7 @@ check("Inference latency per sequence", lat_lstm, TARGETS["latency_ms"],
 # ══════════════════════════════════════════════════════════════════════════════
 separator("4 / 4  DQN Action Recommender")
 
-from dqn_recommender import DQNRecommender
+from app.dqn_recommender import DQNRecommender
 dqn = DQNRecommender("models/dqnModel.pt")
 if not dqn.enabled:
     print("  Model not loaded — skipping")

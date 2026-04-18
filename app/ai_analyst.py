@@ -1,7 +1,7 @@
 import os
 import time
 
-import constants
+from . import constants
 
 # ---------------------------------------------------------------------------
 # Model mapping: Ollama name → Groq equivalent

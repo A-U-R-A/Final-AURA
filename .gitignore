@@ -13,10 +13,16 @@ venv/
 env/
 
 # Data & database
-data/
+data/*.db
+data/*.sqlite
+data/*.sqlite3
 *.db
 *.sqlite
 *.sqlite3
+
+# Secrets
+data/.fernet.key
+.fernet.key
 
 
 

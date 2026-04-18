@@ -26,8 +26,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-import constants
-from data_generator import SensorDataGenerator
+from app import constants
+from app.data_generator import SensorDataGenerator
 from dqn_recommender import DQNNet, STATE_SIZE, N_ACTIONS
 
 # ── Config ────────────────────────────────────────────────────────────────────
