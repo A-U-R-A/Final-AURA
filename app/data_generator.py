@@ -16,7 +16,7 @@ Ported and upgraded from Hunch-AURA/src/dataHandling/rfDataGeneration.py
 """
 
 import numpy as np
-import constants
+from . import constants
 
 # ── Circadian profiles (24 h, sampled at 0,2,4,...,24 h) ──────────────────────
 _CIRC_H    = np.array([0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24], dtype=float)

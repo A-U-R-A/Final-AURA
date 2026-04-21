@@ -14,7 +14,7 @@ Reference: Plan Section 8 — Trend Detection / Sensor Replacement & Recalibrati
 
 import math
 import numpy as np
-import constants
+from . import constants
 
 # Module-level threshold vars — overridden at runtime by settings_manager.apply_to_trend_detector()
 MK_P_THRESHOLD          = 0.01

@@ -1777,6 +1777,7 @@ h3:first-child { margin-top: 0; }
 }
 .settings-field--toggle label { flex: 1; }
 .settings-save-btn { align-self: flex-start; margin-top: 8px; }
+.settings-btn-row  { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
 
 /* ML status cards */
 .ml-status-cards {

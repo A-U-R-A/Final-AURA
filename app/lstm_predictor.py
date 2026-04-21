@@ -25,7 +25,7 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
-import constants
+from . import constants
 
 SEQ_LEN     = 60
 HIDDEN_SIZE = 128

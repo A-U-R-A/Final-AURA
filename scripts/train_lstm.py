@@ -18,9 +18,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, random_split
 
-import constants
-from data_generator import SensorDataGenerator
-from lstm_predictor import ECLSSLSTMPredictor, SEQ_LEN, HIDDEN_SIZE, NUM_LAYERS
+from app import constants
+from app.data_generator import SensorDataGenerator
+from app.lstm_predictor import ECLSSLSTMPredictor, SEQ_LEN, HIDDEN_SIZE, NUM_LAYERS
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SEQ_NOMINAL_PER_LOC = 400    # nominal sequences per location

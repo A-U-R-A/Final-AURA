@@ -1,5 +1,6 @@
 {
   "password_hash": "$2b$12$EB2E32ZdRE//BbGRlc62Xehbd8zRjpAuqkcx4FyQuLwXwd2HprICO",
+  "jwt_secret": "b42459578a221b8bf9b5983932119b6037b799af85b0aba783888053f0d16b46",
   "alert_min_consecutive": 10,
   "alert_cooldown_seconds": 600,
   "alert_critical_rf_gate": 0.85,
@@ -12,7 +13,7 @@
   "fault_injection_enabled": true,
   "if_contamination": 0.1,
   "lstm_seq_len_override": null,
-  "mk_p_threshold": 0.01,
+  "mk_p_threshold": 0.05,
   "mk_tau_advisory": 0.35,
   "mk_tau_warning": 0.65,
   "slope_magnitude_gate": 0.05,
@@ -23,8 +24,9 @@
   "zscore_window": 30,
   "groq_api_key_enc": null,
   "mission_start_iso": null,
-  "dashboard_refresh_ms": 30000,
+  "dashboard_refresh_ms": 5000,
   "chat_max_stored": 40,
   "trends_default_n": 100,
-  "detail_default_n": 100
+  "detail_default_n": 100,
+  "max_stored_rows": 50000
 }

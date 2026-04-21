@@ -31,7 +31,7 @@ echo -e "  ==========================================${RESET}"
 echo ""
 
 # ── 1. Locate Python 3.10+ ──────────────────────────────────
-section "1/5" "Checking Python installation..."
+section "1/6" "Checking Python installation..."
 
 PYTHON_CMD=""
 for candidate in python3.12 python3.11 python3.10 python3 python; do
@@ -56,7 +56,7 @@ if [ -z "$PYTHON_CMD" ]; then
 fi
 
 # ── 2. Create / activate virtualenv ─────────────────────────
-section "2/5" "Checking virtual environment..."
+section "2/6" "Checking virtual environment..."
 
 if [ ! -f "${VENV_DIR}/bin/activate" ]; then
     info "Creating .venv at ${VENV_DIR}"
@@ -75,7 +75,7 @@ PYTHON_CMD="python"   # use venv python from here on
 export PYTHONIOENCODING=utf-8
 
 # ── 3. Install / upgrade dependencies ───────────────────────
-section "3/5" "Installing dependencies from requirements.txt..."
+section "3/6" "Installing dependencies from requirements.txt..."
 
 [ -f "$REQ_FILE" ] || fatal "requirements.txt not found at ${REQ_FILE}"
 
@@ -101,7 +101,7 @@ else
 fi
 
 # ── 4. Train missing models ──────────────────────────────────
-section "4/5" "Checking ML models..."
+section "4/6" "Checking ML models..."
 
 NEEDS_TRAINING=0
 for model in isolationForestModel.joblib randomForestModel.joblib lstmModel.pt dqnModel.pt; do
@@ -144,8 +144,19 @@ else
     info "All models present."
 fi
 
-# ── 5. Start AURA server ─────────────────────────────────────
-section "5/5" "Starting AURA server..."
+# ── 5. Run test suite ────────────────────────────────────────
+section "5/6" "Running pre-flight tests..."
+
+cd "$AURA_DIR"
+if "$PYTHON_CMD" -m pytest tests/ -v --tb=short -q 2>&1; then
+    info "All tests passed."
+else
+    warn "Some tests failed — check output above."
+    warn "Server will still start, but investigate failures before production use."
+fi
+
+# ── 6. Start AURA server ─────────────────────────────────────
+section "6/6" "Starting AURA server..."
 
 echo ""
 echo -e "  ${BOLD}Access the dashboard at:${RESET}  ${CYAN}http://localhost:8000${RESET}"
@@ -154,4 +165,4 @@ echo    "  ------------------------------------------"
 echo ""
 
 cd "$AURA_DIR"
-exec "$PYTHON_CMD" -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+exec "$PYTHON_CMD" -m uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1

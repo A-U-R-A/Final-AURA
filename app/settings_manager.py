@@ -15,8 +15,9 @@ import bcrypt
 from pathlib import Path
 from cryptography.fernet import Fernet
 
-_SETTINGS_PATH  = Path(__file__).parent / "settings.json"
-_FERNET_KEY_PATH = Path(__file__).parent / ".fernet.key"
+_ROOT = Path(__file__).parent.parent   # project root (app/ is one level in)
+_SETTINGS_PATH   = _ROOT / "data" / "settings.json"
+_FERNET_KEY_PATH = _ROOT / "data" / ".fernet.key"
 
 # ── Fernet key (machine-local, never committed) ───────────────────────────────
 
@@ -45,6 +46,8 @@ def decrypt_value(token: str) -> str:
 DEFAULT_SETTINGS: dict = {
     # Auth — password hash is written on first run via init_password()
     "password_hash": None,
+    # JWT secret — generated once and persisted so sessions survive restarts
+    "jwt_secret": None,
 
     # Alert thresholds (mirrors main.py module-level vars)
     "alert_min_consecutive":  10,
@@ -84,6 +87,9 @@ DEFAULT_SETTINGS: dict = {
     "chat_max_stored":        40,
     "trends_default_n":       100,
     "detail_default_n":       100,
+
+    # Data retention — prune generated_data when row count exceeds this
+    "max_stored_rows": 50000,
 }
 
 # ── Load / save ───────────────────────────────────────────────────────────────
@@ -156,6 +162,15 @@ def get_groq_key() -> str | None:
         return decrypt_value(enc)
     except Exception:
         return None
+
+
+def get_jwt_secret() -> str:
+    """Return the persistent JWT signing secret, generating it on first call."""
+    s = _settings.get("jwt_secret")
+    if not s:
+        s = secrets.token_hex(32)
+        set_and_save({"jwt_secret": s})
+    return s
 
 
 # ── Hot-reload helpers ────────────────────────────────────────────────────────

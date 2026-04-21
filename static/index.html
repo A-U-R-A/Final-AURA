@@ -341,11 +341,6 @@
               <div class="settings-action-desc">Removes all alert records from the database.</div>
               <button class="btn btn-danger" id="btn-clear-alert-history">Clear Alerts</button>
             </div>
-            <div class="settings-action-card warning">
-              <div class="settings-action-title">Clear Active Faults</div>
-              <div class="settings-action-desc">Resets all injected faults, latched states, and alert streak counters.</div>
-              <button class="btn btn-warning" id="btn-clear-faults-settings">Clear Faults</button>
-            </div>
             <div class="settings-action-card">
               <div class="settings-action-title">Clear LSTM Buffers</div>
               <div class="settings-action-desc">Forces all LSTM rolling windows to refill. Use after sensor recalibration.</div>
@@ -399,7 +394,10 @@
               <label>DQN RF bypass threshold (0–1)</label>
               <input type="number" id="s-dqn-bypass" min="0" max="1" step="0.01" />
             </div>
-            <button class="btn btn-primary settings-save-btn" id="btn-save-alerts">Save Alert Settings</button>
+            <div class="settings-btn-row">
+              <button class="btn btn-primary settings-save-btn" id="btn-save-alerts">Save Alert Settings</button>
+              <button class="btn btn-ghost settings-save-btn" id="btn-reset-alerts">Reset to Default</button>
+            </div>
           </div>
         </div>
 
@@ -427,7 +425,10 @@
               <label>Fault injection enabled</label>
               <input type="checkbox" id="s-fault-injection" />
             </div>
-            <button class="btn btn-primary settings-save-btn" id="btn-save-generation">Save Generation Settings</button>
+            <div class="settings-btn-row">
+              <button class="btn btn-primary settings-save-btn" id="btn-save-generation">Save Generation Settings</button>
+              <button class="btn btn-ghost settings-save-btn" id="btn-reset-generation">Reset to Default</button>
+            </div>
           </div>
         </div>
 
@@ -517,7 +518,10 @@
               <label>Rolling z-score window (readings)</label>
               <input type="number" id="s-zscore-window" min="5" max="100" />
             </div>
-            <button class="btn btn-primary settings-save-btn" id="btn-save-trends">Save Trend Settings</button>
+            <div class="settings-btn-row">
+              <button class="btn btn-primary settings-save-btn" id="btn-save-trends">Save Trend Settings</button>
+              <button class="btn btn-ghost settings-save-btn" id="btn-reset-trends">Reset to Default</button>
+            </div>
           </div>
         </div>
 
@@ -567,7 +571,10 @@
               <label>Default detail chart N points</label>
               <input type="number" id="s-detail-n" min="50" max="1000" />
             </div>
-            <button class="btn btn-primary settings-save-btn" id="btn-save-display">Save Display Settings</button>
+            <div class="settings-btn-row">
+              <button class="btn btn-primary settings-save-btn" id="btn-save-display">Save Display Settings</button>
+              <button class="btn btn-ghost settings-save-btn" id="btn-reset-display">Reset to Default</button>
+            </div>
           </div>
         </div>
 

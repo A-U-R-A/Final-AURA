@@ -1,7 +1,7 @@
 import numpy as np
 import joblib
 from pathlib import Path
-import constants
+from . import constants
 
 
 class MLPipeline:

@@ -26,7 +26,7 @@ echo  ==========================================
 echo.
 
 :: ── 1. Locate Python (3.10+) ────────────────────────────────
-echo [1/5] Checking Python installation...
+echo [1/6] Checking Python installation...
 
 set "PYTHON_CMD="
 
@@ -72,7 +72,7 @@ echo     OK ^(!PY_FULL!^)
 
 :: ── 2. Create / activate virtualenv ────────────────────────
 echo.
-echo [2/5] Checking virtual environment...
+echo [2/6] Checking virtual environment...
 
 if not exist "%VENV_DIR%\Scripts\activate.bat" (
     echo     Creating .venv at %VENV_DIR%
@@ -94,7 +94,7 @@ set "PYTHON_CMD=python"
 
 :: ── 3. Install / upgrade dependencies ──────────────────────
 echo.
-echo [3/5] Installing dependencies from requirements.txt...
+echo [3/6] Installing dependencies from requirements.txt...
 
 if not exist "%REQ_FILE%" (
     echo  [ERROR] requirements.txt not found at %REQ_FILE%
@@ -129,7 +129,7 @@ if "!CURRENT_HASH!" == "!STORED_HASH!" (
 
 :: ── 4. Train missing models ─────────────────────────────────
 echo.
-echo [4/5] Checking ML models...
+echo [4/6] Checking ML models...
 
 set "ALL_MODELS=1"
 for %%M in (isolationForestModel.joblib randomForestModel.joblib lstmModel.pt dqnModel.pt) do (
@@ -176,9 +176,22 @@ if !ALL_MODELS! == 0 (
     echo     All models present.
 )
 
-:: ── 5. Start AURA server ────────────────────────────────────
+:: ── 5. Run test suite ───────────────────────────────────────
 echo.
-echo [5/5] Starting AURA server...
+echo [5/6] Running pre-flight tests...
+
+cd /d "%AURA_DIR%"
+set PYTHONIOENCODING=utf-8
+%PYTHON_CMD% -m pytest tests/ -v --tb=short -q
+if !ERRORLEVEL! NEQ 0 (
+    echo.
+    echo     [WARN] Some tests failed. Server will still start.
+    echo     Investigate failures before production use.
+)
+
+:: ── 6. Start AURA server ────────────────────────────────────
+echo.
+echo [6/6] Starting AURA server...
 echo.
 echo  Access the dashboard at:  http://localhost:8000
 echo  Press Ctrl+C to stop.
@@ -188,7 +201,7 @@ echo  ------------------------------------------
 cd /d "%AURA_DIR%"
 set PYTHONIOENCODING=utf-8
 
-%PYTHON_CMD% -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+%PYTHON_CMD% -m uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
 
 :: If server exits non-zero, pause so the user can read errors
 if !ERRORLEVEL! NEQ 0 (

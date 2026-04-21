@@ -19,8 +19,8 @@ import joblib
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, confusion_matrix
-import constants
-from data_generator import SensorDataGenerator
+from app import constants
+from app.data_generator import SensorDataGenerator
 
 # ── Config ────────────────────────────────────────────────────────────────────
 N_PER_TRAJ   = 300    # samples per trajectory — matches test horizon (5 h at 60 s/step)

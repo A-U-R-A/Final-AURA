@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from typing import Optional
 
-import constants
+from . import constants
 
 N_PARAMS  = len(constants.PARAMETER_NOMINAL_RANGES)   # 20
 N_FAULTS  = len(constants.FAULT_IMPACT_SEVERITY)      # 8
