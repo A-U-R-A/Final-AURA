@@ -16,12 +16,32 @@ import math
 import numpy as np
 import constants
 
+# Module-level threshold vars — overridden at runtime by settings_manager.apply_to_trend_detector()
+MK_P_THRESHOLD          = 0.01
+MK_TAU_ADVISORY         = 0.35
+MK_TAU_WARNING          = 0.65
+SLOPE_MAGNITUDE_GATE    = 0.05
+CUSUM_THRESHOLD         = 7.0
+CUSUM_BASELINE_PCT      = 0.20
+ZSCORE_THRESHOLD        = 3.5
+ZSCORE_SINGLE_THRESHOLD = 4.5
+ZSCORE_WINDOW           = 30
+
 
 # ── Mann-Kendall test ─────────────────────────────────────────────────────────
 
 def mann_kendall(x: list[float]) -> dict:
     """
-    Non-parametric trend test.  No library dependency — pure Python/NumPy.
+    Non-parametric monotonic trend test.  No external library — pure Python/NumPy.
+
+    The test counts concordant (S += 1) vs. discordant (S -= 1) pairs of readings.
+    A large positive S → upward trend; large negative → downward.
+
+    S is approximately normally distributed for n ≥ 10, so we compute:
+        Z = (S ± 1) / sqrt(Var(S))     (continuity correction)
+    and derive a two-tailed p-value using the standard normal CDF.
+
+    Kendall's τ = S / (n*(n-1)/2) normalises S to [-1, 1].
 
     Returns:
         {
@@ -36,7 +56,7 @@ def mann_kendall(x: list[float]) -> dict:
     if n < 4:
         return {"tau": 0.0, "p_value": 1.0, "trend": "no trend", "significant": False}
 
-    # S statistic
+    # S = sum of sign(x[j] - x[i]) for all i < j pairs
     S = 0
     for i in range(n - 1):
         for j in range(i + 1, n):
@@ -46,10 +66,10 @@ def mann_kendall(x: list[float]) -> dict:
             elif diff < 0:
                 S -= 1
 
-    # Variance of S (simplified, no tie correction)
+    # Variance of S under H0 (simplified formula, no tie correction needed for continuous data)
     var_S = n * (n - 1) * (2 * n + 5) / 18.0
 
-    # Z statistic
+    # Z with continuity correction (±1 adjustment brings discrete S closer to normal)
     if S > 0:
         Z = (S - 1) / math.sqrt(var_S)
     elif S < 0:
@@ -57,11 +77,11 @@ def mann_kendall(x: list[float]) -> dict:
     else:
         Z = 0.0
 
-    # Two-tailed p-value (normal approximation)
+    # Two-tailed p-value from normal approximation
     p_value = 2.0 * (1.0 - _norm_cdf(abs(Z)))
 
     tau = S / (0.5 * n * (n - 1))
-    significant = p_value < 0.05
+    significant = p_value < MK_P_THRESHOLD
 
     if significant and tau > 0:
         trend = "increasing"
@@ -104,27 +124,38 @@ def sens_slope(x: list[float]) -> float:
 
 # ── CUSUM change-point ────────────────────────────────────────────────────────
 
-def cusum_change_point(x: list[float], threshold: float = 5.0) -> dict:
+def cusum_change_point(x: list[float], threshold: float | None = None) -> dict:
     """
-    Cumulative-sum control chart to detect a single step change.
+    Cumulative-sum (CUSUM) control chart to detect a single step-change.
 
-    Returns:
-        {"detected": bool, "change_index": int | None,
-         "direction": "up" | "down" | None}
+    Baseline is estimated from the first 20% of readings (min 15, max 40) so that
+    long-running sensors don't use a stale 5-point window as their reference.
+    A minimum sigma floor of 0.5% of the data range prevents near-flat signals
+    from making sigma → 0 and triggering on noise counts.
+
+    threshold=7.0 gives ~1 false alarm per 2000 readings at this slack setting.
     """
+    if threshold is None:
+        threshold = CUSUM_THRESHOLD
     x = np.asarray(x, dtype=float)
-    if len(x) < 5:
+    if len(x) < 15:
         return {"detected": False, "change_index": None, "direction": None}
 
-    mu = x[:5].mean()
-    sigma = x[:5].std() + 1e-8
+    baseline_pct = CUSUM_BASELINE_PCT
+    baseline_n = max(15, min(40, int(len(x) * baseline_pct)))
+    mu    = x[:baseline_n].mean()
+    sigma = x[:baseline_n].std()
+    # Floor: 0.5% of the observed data range — prevents false alarms on near-flat signals
+    sigma = max(sigma, 0.005 * (x.max() - x.min() + 1e-8))
 
     S_hi = np.zeros(len(x))
     S_lo = np.zeros(len(x))
     for i in range(1, len(x)):
+        # Accumulate normalised deviation; reset to 0 if the signal reverts (clamp)
         S_hi[i] = max(0, S_hi[i-1] + (x[i] - mu) / sigma - 0.5)
         S_lo[i] = max(0, S_lo[i-1] - (x[i] - mu) / sigma - 0.5)
 
+    # Report the first index where the accumulator crosses the threshold
     if S_hi.max() > threshold:
         idx = int(np.argmax(S_hi > threshold))
         return {"detected": True, "change_index": idx, "direction": "up"}
@@ -137,11 +168,14 @@ def cusum_change_point(x: list[float], threshold: float = 5.0) -> dict:
 
 # ── Rolling z-score ───────────────────────────────────────────────────────────
 
-def rolling_zscore(x: list[float], window: int = 20) -> float:
+def rolling_zscore(x: list[float], window: int | None = None) -> float:
     """
-    Z-score of the most recent value relative to the last `window` values.
-    High absolute value (>2) suggests a sudden shift.
+    Z-score of the most recent value relative to the preceding `window` values.
+    Window raised to 30 for a more stable baseline.
+    Returns 0.0 when the series is too short or perfectly flat.
     """
+    if window is None:
+        window = ZSCORE_WINDOW
     x = np.asarray(x, dtype=float)
     if len(x) < window + 1:
         return 0.0
@@ -216,28 +250,59 @@ def _classify_severity(
     mk: dict, slope: float, cusum: dict, z: float,
     values: list[float], nominal_range
 ) -> str:
-    """Assign one of: critical | warning | advisory | nominal."""
+    """
+    Assign one of: critical | warning | advisory | nominal.
+
+    Tuning philosophy — each gate must pass two independent checks:
+      • Statistical signal (MK tau, z, CUSUM) must exceed a high threshold so
+        random noise doesn't fire on 1-in-20 sensors by chance.
+      • Physical magnitude must be meaningful — a statistically real but
+        physically tiny trend (e.g. 0.001 units/hr) is not actionable.
+    """
+    lo, hi, span = None, None, 1.0
     if nominal_range:
         lo, hi = nominal_range
+        span = max(hi - lo, 1e-8)
         current = values[-1]
-        span = hi - lo
 
-        # Outside nominal bounds
+        # Hard out-of-bounds check (always immediate, no magnitude gate needed)
         if current < lo - 0.15 * span or current > hi + 0.15 * span:
             return "critical"
         if current < lo or current > hi:
             return "warning"
 
-    # Strong significant trend
-    if mk["significant"] and abs(mk["tau"]) > 0.5:
-        return "warning"
+    # ── Trend severity ────────────────────────────────────────────────────────
+    # Magnitude gate: Sen's slope projected over the full window must move ≥ 5%
+    # of the nominal span. Filters statistically real but physically negligible drifts.
+    projected_move = abs(slope) * len(values)
+    slope_significant = projected_move >= 0.05 * span
 
-    # Sudden shift detected by CUSUM or z-score
-    if cusum["detected"] or abs(z) > 2.5:
+    if mk["significant"] and abs(mk["tau"]) > MK_TAU_WARNING and slope_significant:
+        # Strong monotonic trend heading somewhere meaningful
+        if nominal_range:
+            current = values[-1]
+            # Only warn if the trend is pointing toward a boundary
+            trending_toward_bound = (slope > 0 and current > lo + 0.5 * span) or \
+                                    (slope < 0 and current < lo + 0.5 * span)
+            if trending_toward_bound:
+                return "warning"
+        else:
+            return "warning"
+
+    # ── Advisory: require ≥ 2 independent signals, or 1 strong signal + magnitude ──
+    signals = 0
+    if mk["significant"] and abs(mk["tau"]) > MK_TAU_ADVISORY and slope_significant:
+        signals += 1
+    if cusum["detected"]:
+        signals += 1
+    if abs(z) > ZSCORE_THRESHOLD:
+        signals += 1
+
+    if signals >= 2:
         return "advisory"
 
-    # Mild significant trend
-    if mk["significant"]:
+    # Single strong z-score alone (very large spike) still warrants advisory
+    if abs(z) > ZSCORE_SINGLE_THRESHOLD:
         return "advisory"
 
     return "nominal"

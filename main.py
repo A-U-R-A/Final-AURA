@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Set
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -19,6 +19,7 @@ from lstm_predictor import LSTMPipeline
 from dqn_recommender import DQNRecommender
 import ai_analyst
 import trend_detector
+import settings_manager
 
 # ---------------------------------------------------------------------------
 # Shared application state
@@ -40,19 +41,27 @@ _ws_clients: Set[WebSocket] = set()
 # catching real sustained faults quickly.
 _alert_last_ts: dict[str, datetime] = {}
 _alert_consec:  dict[str, int]      = {}   # consecutive anomalous tick count
-ALERT_MIN_CONSECUTIVE  = 5    # ticks of sustained anomaly before alerting
-ALERT_COOLDOWN_SECONDS = 300  # min seconds between repeat alerts for same location/fault
+_alert_top_fault: dict[str, str | None] = {}  # top RF fault during current streak
+ALERT_MIN_CONSECUTIVE   = settings_manager.get("alert_min_consecutive",  10)
+ALERT_COOLDOWN_SECONDS  = settings_manager.get("alert_cooldown_seconds", 600)
+ALERT_CRITICAL_RF_GATE  = settings_manager.get("alert_critical_rf_gate", 0.85)
 
-# Fault latch: once RF confidence >= LATCH_THRESHOLD the detected fault is pinned
-# for that location and will keep showing even on nominal IF ticks, until the user
-# explicitly resolves it via DELETE /api/faults/latch/{location}.
+# Fault latch: once RF confidence >= LATCH_THRESHOLD for LATCH_MIN_CONSECUTIVE *consecutive*
+# ticks (same fault class each tick) the detected fault is pinned for that location.
+# Pinned display persists even on nominal IF ticks until the user explicitly resolves it.
+# Requiring multiple consecutive high-confidence ticks eliminates single-tick false latches.
 _latched_fault:  dict[str, str] = {}
 _latch_alerted:  set[str]       = set()   # locations that have had their latch alert fired
-LATCH_THRESHOLD = 0.90
+_latch_consec:   dict[str, int] = {}      # consecutive ticks at or above LATCH_THRESHOLD
+_latch_streak:   dict[str, str] = {}      # fault class accumulating toward latch
+LATCH_THRESHOLD       = settings_manager.get("latch_threshold",       0.95)
+LATCH_MIN_CONSECUTIVE = settings_manager.get("latch_min_consecutive", 3)
 
 
 async def _broadcast(message: dict):
-    """Send a JSON message to all connected WebSocket clients."""
+    """Fan-out a JSON message to all connected WebSocket clients.
+    Any client whose send raises (disconnected, closed) is collected in 'dead'
+    and removed after the loop — avoids modifying the set while iterating."""
     if not _ws_clients:
         return
     data = json.dumps(message, default=str)
@@ -71,8 +80,15 @@ async def _broadcast(message: dict):
 
 async def _generation_loop():
     """
-    Every DATA_GENERATION_INTERVAL seconds, sample all ISS locations,
-    run ML inference, persist to DB, and broadcast via WebSocket.
+    Core real-time loop. Every DATA_GENERATION_INTERVAL seconds:
+      1. Sample all ISS locations from the data generator.
+      2. Run IF + RF inference (MLPipeline.predict).
+      3. Feed the reading to the LSTM rolling buffer; run LSTM prediction.
+      4. Query the DQN for a remediation action recommendation.
+      5. Evaluate the alert debounce state machine (consecutive anomaly counter + cooldown).
+      6. Evaluate the fault latch (pin high-confidence faults until explicitly resolved).
+      7. Persist everything to SQLite.
+      8. Broadcast 'tick' messages (one per location) + a consolidated 'state' message.
     """
     while True:
         try:
@@ -116,21 +132,32 @@ async def _generation_loop():
                     rul_hours=rul_hours,
                 )
 
-                # Alert debounce: increment consecutive counter on anomaly,
-                # reset to 0 on any nominal reading.  Only fire when the
-                # counter hits ALERT_MIN_CONSECUTIVE AND cooldown has elapsed.
-                # P(5 consecutive FPs at 3% FPR) = 0.03^5 ≈ 0.000002 → ~0/day.
+                # ── Alert debounce state machine ──────────────────────────────
+                # Consecutive-anomaly counter resets to 0 on any nominal tick.
+                # On each anomalous tick we also track the top RF fault class.
+                # If the fault class changes mid-streak we reset — a streak where
+                # the RF can't agree on a fault class is likely noise, not a real event.
+                # P(10 consecutive FPs at 3% IF FPR) = 0.03^10 ≈ 6e-17 → ~0/lifetime.
                 is_anomalous = if_label == -1
                 if is_anomalous:
-                    _alert_consec[location] = _alert_consec.get(location, 0) + 1
-                else:
-                    _alert_consec[location] = 0
+                    tick_top_fault = None
+                    if rf_class:
+                        tick_top_fault, _ = max(rf_class.items(), key=lambda x: x[1])
 
-                consec     = _alert_consec.get(location, 0)
-                now_dt     = datetime.fromisoformat(ts)
-                # Cooldown key is per-location so bursts at one location don't
-                # block alerts at another.
-                last_ts    = _alert_last_ts.get(location)
+                    prev_streak_fault = _alert_top_fault.get(location)
+                    if prev_streak_fault is not None and tick_top_fault != prev_streak_fault:
+                        # RF fault class changed — treat as a fresh streak, not continuation
+                        _alert_consec[location] = 1
+                    else:
+                        _alert_consec[location] = _alert_consec.get(location, 0) + 1
+                    _alert_top_fault[location] = tick_top_fault
+                else:
+                    _alert_consec[location]    = 0
+                    _alert_top_fault[location] = None
+
+                consec  = _alert_consec.get(location, 0)
+                now_dt  = datetime.fromisoformat(ts)
+                last_ts = _alert_last_ts.get(location)
                 cooldown_ok = (
                     last_ts is None or
                     (now_dt - last_ts).total_seconds() >= ALERT_COOLDOWN_SECONDS
@@ -141,7 +168,8 @@ async def _generation_loop():
                     if rf_class:
                         top_fault, top_prob = max(rf_class.items(), key=lambda x: x[1])
 
-                    severity = "CRITICAL" if (top_prob or 0) > 0.7 else "WARNING"
+                    # Raise CRITICAL bar to 0.85 — RF regularly hits 70%+ on false positives
+                    severity = "CRITICAL" if (top_prob or 0) > ALERT_CRITICAL_RF_GATE else "WARNING"
                     db.insert_alert(
                         location_name=location,
                         timestamp=ts,
@@ -158,23 +186,48 @@ async def _generation_loop():
                         "top_prob":   top_prob,
                         "timestamp":  ts,
                     })
-                    _alert_last_ts[location] = now_dt
-                    _alert_consec[location]  = 0   # reset so next burst is fresh
+                    _alert_last_ts[location]   = now_dt
+                    _alert_consec[location]    = 0   # reset so next burst is a fresh count
+                    _alert_top_fault[location] = None
 
-                # detected_fault: what the AI has actually identified.
-                # The injected fault (active_fault) is kept internal — it only
-                # drives sensor drift in the generator.  The frontend only learns
-                # about a fault once IF flags anomalous AND RF classifies it with
-                # >= 60 % confidence.  This keeps visuals 100 % AI-driven.
-                # Once RF confidence hits LATCH_THRESHOLD (90%), the fault display
-                # is pinned for that location and will not bounce back to nominal
-                # until the user explicitly resolves it.
+                # ── Fault visibility logic ────────────────────────────────────
+                # detected_fault is what the AI reports to the frontend.
+                # active_fault (the injected fault) is internal — it only drives
+                # sensor drift in the generator. The frontend never sees it directly.
+                # Visibility requires BOTH: IF anomalous AND RF >= 60% confidence.
+                # This keeps the display 100% AI-driven (no "oracle" display).
+                #
+                # Latch: once RF confidence hits LATCH_THRESHOLD (90%), pin the fault
+                # display for this location. Even if IF returns nominal on the next tick
+                # (a transient false-negative), the pinned fault keeps showing. The latch
+                # is only cleared when the user clicks "Resolve" (DELETE /api/faults/latch/…).
                 detected_fault = None
                 if if_label == -1 and rf_class:
                     _top_fault, _top_prob = max(rf_class.items(), key=lambda x: x[1])
                     if _top_prob >= 0.60:
                         detected_fault = _top_fault
+
+                    # ── Latch consecutive gate ─────────────────────────────────
+                    # Only advance the latch counter when RF is ≥ LATCH_THRESHOLD
+                    # AND the top fault class is the same as the current streak.
+                    # A single high-confidence tick on a noisy IF false-positive
+                    # will NOT latch — the streak must be consistent across
+                    # LATCH_MIN_CONSECUTIVE ticks before the fault is pinned.
                     if _top_prob >= LATCH_THRESHOLD:
+                        prev_latch_fault = _latch_streak.get(location)
+                        if prev_latch_fault == _top_fault:
+                            _latch_consec[location] = _latch_consec.get(location, 0) + 1
+                        else:
+                            # New fault class — restart the consecutive counter
+                            _latch_consec[location] = 1
+                            _latch_streak[location] = _top_fault
+                    else:
+                        # Fell below threshold — reset latch streak for this location
+                        _latch_consec[location] = 0
+                        _latch_streak.pop(location, None)
+
+                    # Latch only once enough consecutive high-confidence ticks accumulate
+                    if _latch_consec.get(location, 0) >= LATCH_MIN_CONSECUTIVE:
                         newly_latched = location not in _latched_fault
                         _latched_fault[location] = _top_fault
                         if newly_latched and location not in _latch_alerted:
@@ -196,6 +249,10 @@ async def _generation_loop():
                                 "timestamp":  ts,
                                 "latched":    True,
                             })
+                else:
+                    # IF returned nominal — reset the latch streak (no consecutive progress)
+                    _latch_consec.pop(location, None)
+                    _latch_streak.pop(location, None)
 
                 # Honor the latch even when IF returns nominal
                 if detected_fault is None and location in _latched_fault:
@@ -245,6 +302,9 @@ async def _generation_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Apply persisted settings to live modules before first tick
+    settings_manager.apply_to_trend_detector(trend_detector)
+    settings_manager.apply_to_dqn(dqn)
     task = asyncio.create_task(_generation_loop())
     yield
     task.cancel()
@@ -274,6 +334,10 @@ def get_config():
         "parameter_nominal_ranges": constants.PARAMETER_NOMINAL_RANGES,
         "parameter_units": constants.PARAMETER_UNITS,
         "faults": list(constants.FAULT_IMPACT_SEVERITY.keys()),
+        "fault_impacts": {
+            fault: list(data["impacts"].keys())
+            for fault, data in constants.FAULT_IMPACT_SEVERITY.items()
+        },
         "actions": constants.ACTIONS_TO_TAKE,
         "fault_precursor_hours": constants.FAULT_PRECURSOR_HOURS,
         "ml_enabled":   ml.enabled,
@@ -296,7 +360,7 @@ def get_latest(location_name: str):
     return db.get_latest_reading(location_name)
 
 
-@app.get("/api/location/{location_name}/history/{parameter}")
+@app.get("/api/location/{location_name}/history")
 def get_history(location_name: str, parameter: str, n: int = 50):
     """Last n readings for a specific parameter at a location."""
     if location_name not in constants.LOCATIONS:
@@ -369,8 +433,11 @@ def clear_all_faults():
     lstm.clear_buffer()
     _alert_consec.clear()
     _alert_last_ts.clear()
+    _alert_top_fault.clear()
     _latched_fault.clear()
     _latch_alerted.clear()
+    _latch_consec.clear()
+    _latch_streak.clear()
     return {"status": "ok"}
 
 
@@ -383,8 +450,11 @@ def clear_location_fault(location_name: str):
     lstm.clear_buffer(location_name)
     _alert_consec.pop(location_name, None)
     _alert_last_ts.pop(location_name, None)
+    _alert_top_fault.pop(location_name, None)
     _latched_fault.pop(location_name, None)
     _latch_alerted.discard(location_name)
+    _latch_consec.pop(location_name, None)
+    _latch_streak.pop(location_name, None)
     return {"status": "ok", "location": location_name}
 
 
@@ -397,6 +467,8 @@ def resolve_latched_fault(location_name: str):
         raise HTTPException(404, f"Location {location_name!r} not found")
     _latched_fault.pop(location_name, None)
     _latch_alerted.discard(location_name)
+    _latch_consec.pop(location_name, None)
+    _latch_streak.pop(location_name, None)
     return {"status": "ok", "location": location_name}
 
 
@@ -406,9 +478,12 @@ def clear_data():
     db.clear_alerts()
     generator.reset_drift()
     generator._mission_seconds = 0.0
-    # Also reset alert debounce state so stale consecutive counts don't linger
+    # Reset all alert + latch state so stale counts don't carry over
     _alert_consec.clear()
     _alert_last_ts.clear()
+    _alert_top_fault.clear()
+    _latch_consec.clear()
+    _latch_streak.clear()
     return {"status": "ok", "message": "All sensor data, alerts, and drift state cleared"}
 
 
@@ -709,6 +784,288 @@ async def websocket_live(websocket: WebSocket):
         _ws_clients.discard(websocket)
     except Exception:
         _ws_clients.discard(websocket)
+
+
+# ---------------------------------------------------------------------------
+# Auth + Settings
+# ---------------------------------------------------------------------------
+
+import secrets as _secrets
+from datetime import timedelta
+from jose import jwt as _jwt, JWTError
+
+_JWT_SECRET   = _secrets.token_hex(32)   # regenerated each restart — all sessions invalidate on restart
+_JWT_ALG      = "HS256"
+_JWT_TTL_MIN  = 30
+_REVOKED_JTIS: set[str] = set()
+
+
+def _make_token() -> str:
+    jti = _secrets.token_hex(16)
+    payload = {
+        "sub": "admin",
+        "jti": jti,
+        "exp": datetime.utcnow() + timedelta(minutes=_JWT_TTL_MIN),
+    }
+    return _jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALG)
+
+
+def _verify_token(token: str) -> bool:
+    try:
+        payload = _jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALG])
+        return payload.get("jti") not in _REVOKED_JTIS
+    except JWTError:
+        return False
+
+
+def _require_auth(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or not _verify_token(auth[7:]):
+        raise HTTPException(401, "Unauthorized")
+
+
+class LoginRequest(BaseModel):
+    password: str
+
+class PasswordChangeRequest(BaseModel):
+    current: str
+    new_password: str
+
+class SettingsUpdateRequest(BaseModel):
+    updates: dict
+
+class ExportedClearRequest(BaseModel):
+    max_id: int
+
+
+@app.post("/api/auth/login")
+def auth_login(req: LoginRequest):
+    if not settings_manager.verify_password(req.password):
+        raise HTTPException(401, "Invalid password")
+    return {"token": _make_token(), "ttl_minutes": _JWT_TTL_MIN}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            payload = _jwt.decode(auth[7:], _JWT_SECRET, algorithms=[_JWT_ALG])
+            _REVOKED_JTIS.add(payload["jti"])
+        except JWTError:
+            pass
+    return {"status": "ok"}
+
+
+@app.get("/api/settings")
+def get_settings(request: Request):
+    _require_auth(request)
+    s = dict(settings_manager._settings)
+    # Never expose sensitive values to the frontend
+    s.pop("password_hash", None)
+    s["groq_key_set"] = bool(s.pop("groq_api_key_enc", None))
+    return s
+
+
+@app.patch("/api/settings/alerts")
+def save_alert_settings(req: SettingsUpdateRequest, request: Request):
+    _require_auth(request)
+    allowed = {"alert_min_consecutive", "alert_cooldown_seconds",
+               "alert_critical_rf_gate", "latch_threshold",
+               "latch_min_consecutive", "dqn_rf_bypass_threshold"}
+    filtered = {k: v for k, v in req.updates.items() if k in allowed}
+    settings_manager.set_and_save(filtered)
+    # Hot-reload into running module vars
+    import sys
+    settings_manager.apply_to_main(sys.modules[__name__])
+    settings_manager.apply_to_dqn(dqn)
+    return {"status": "ok"}
+
+
+@app.patch("/api/settings/trends")
+def save_trend_settings(req: SettingsUpdateRequest, request: Request):
+    _require_auth(request)
+    allowed = {"mk_p_threshold", "mk_tau_advisory", "mk_tau_warning",
+               "slope_magnitude_gate", "cusum_threshold", "cusum_baseline_pct",
+               "zscore_threshold", "zscore_single_threshold", "zscore_window"}
+    filtered = {k: v for k, v in req.updates.items() if k in allowed}
+    settings_manager.set_and_save(filtered)
+    settings_manager.apply_to_trend_detector(trend_detector)
+    return {"status": "ok"}
+
+
+@app.patch("/api/settings/generation")
+def save_generation_settings(req: SettingsUpdateRequest, request: Request):
+    _require_auth(request)
+    allowed = {"tick_interval_seconds", "noise_scale",
+               "crew_event_frequency", "fault_injection_enabled"}
+    filtered = {k: v for k, v in req.updates.items() if k in allowed}
+    settings_manager.set_and_save(filtered)
+    return {"status": "ok"}
+
+
+@app.patch("/api/settings/display")
+def save_display_settings(req: SettingsUpdateRequest, request: Request):
+    _require_auth(request)
+    allowed = {"mission_start_iso", "dashboard_refresh_ms",
+               "chat_max_stored", "trends_default_n", "detail_default_n"}
+    filtered = {k: v for k, v in req.updates.items() if k in allowed}
+    settings_manager.set_and_save(filtered)
+    return {"status": "ok"}
+
+
+@app.patch("/api/settings/integrations/groq")
+def save_groq_key(req: SettingsUpdateRequest, request: Request):
+    _require_auth(request)
+    key = req.updates.get("groq_api_key", "").strip()
+    settings_manager.set_groq_key(key if key else None)
+    if key:
+        import os
+        os.environ["GROQ_API_KEY"] = key
+    elif "GROQ_API_KEY" in os.environ:
+        del os.environ["GROQ_API_KEY"]
+    return {"status": "ok"}
+
+
+@app.post("/api/settings/integrations/groq/test")
+def test_groq_key(request: Request):
+    _require_auth(request)
+    key = settings_manager.get_groq_key()
+    if not key:
+        return {"ok": False, "error": "No key stored"}
+    try:
+        from groq import Groq
+        client = Groq(api_key=key)
+        client.models.list()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/settings/security/change-password")
+def change_password(req: PasswordChangeRequest, request: Request):
+    _require_auth(request)
+    if not settings_manager.change_password(req.current, req.new_password):
+        raise HTTPException(400, "Current password incorrect")
+    return {"status": "ok"}
+
+
+@app.post("/api/settings/security/revoke-all")
+def revoke_all_sessions(request: Request):
+    _require_auth(request)
+    global _JWT_SECRET
+    _JWT_SECRET = _secrets.token_hex(32)
+    _REVOKED_JTIS.clear()
+    return {"status": "ok"}
+
+
+@app.get("/api/settings/ml/status")
+def ml_model_status(request: Request):
+    _require_auth(request)
+    import sklearn
+    return {
+        "sklearn_version": sklearn.__version__,
+        "ml_enabled":   ml.enabled,
+        "lstm_enabled": lstm.enabled,
+        "dqn_enabled":  dqn.enabled,
+    }
+
+
+@app.delete("/api/settings/data/sensor")
+def clear_sensor_data_settings(request: Request):
+    _require_auth(request)
+    db.clear_data()
+    lstm.clear_buffer()
+    return {"status": "ok"}
+
+
+@app.delete("/api/settings/data/alerts")
+def clear_alert_data(request: Request):
+    _require_auth(request)
+    db.clear_alerts()
+    return {"status": "ok"}
+
+
+@app.delete("/api/settings/data/faults")
+def clear_fault_data_settings(request: Request):
+    _require_auth(request)
+    global _latched_fault, _latch_alerted, _latch_consec, _latch_streak
+    global _alert_consec, _alert_last_ts, _alert_top_fault
+    _latched_fault  = {}
+    _latch_alerted  = set()
+    _latch_consec   = {}
+    _latch_streak   = {}
+    _alert_consec   = {}
+    _alert_last_ts  = {}
+    _alert_top_fault = {}
+    return {"status": "ok"}
+
+
+@app.delete("/api/settings/data/lstm")
+def clear_lstm_buffers(request: Request):
+    _require_auth(request)
+    lstm.clear_buffer()
+    return {"status": "ok"}
+
+
+@app.get("/api/settings/data/export/csv")
+def export_sensor_csv(request: Request):
+    _require_auth(request)
+    watermark = db.get_export_max_id() or 0
+    row_count = db.get_row_count_up_to(watermark) if watermark else 0
+
+    def _generate():
+        yield "id,timestamp,location,parameter,value,is_anomalous,rf_prediction,rf_confidence\n"
+        if watermark == 0:
+            return
+        import sqlite3 as _sq
+        conn = _sq.connect(db.db_path, check_same_thread=False)
+        conn.row_factory = _sq.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            cursor = conn.execute(
+                """SELECT gd.id, gd.timestamp, l.location_name, gd.data,
+                          al.isolation_forest_label,
+                          al.random_forest_classification
+                   FROM generated_data gd
+                   JOIN locations l ON l.id = gd.location_id
+                   LEFT JOIN anomaly_labels al ON al.data_row_id = gd.id
+                   WHERE gd.id <= ?
+                   ORDER BY gd.id""",
+                (watermark,),
+            )
+            for row in cursor:
+                data_dict = json.loads(row["data"])
+                is_anom = row["isolation_forest_label"] == -1 \
+                    if row["isolation_forest_label"] is not None else False
+                rf_raw = json.loads(row["random_forest_classification"] or "null")
+                rf_pred = rf_raw.get("prediction", "") if isinstance(rf_raw, dict) else ""
+                rf_conf = rf_raw.get("confidence", "") if isinstance(rf_raw, dict) else ""
+                loc = row["location_name"].replace('"', '""')
+                ts  = str(row["timestamp"]).replace('"', '""')
+                for param, value in data_dict.items():
+                    p = param.replace('"', '""')
+                    yield f'{row["id"]},"{ts}","{loc}","{p}",{value},{is_anom},"{rf_pred}",{rf_conf}\n'
+        finally:
+            conn.close()
+
+    fname = f"aura_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "X-Export-Max-Id":    str(watermark),
+        "X-Export-Row-Count": str(row_count),
+        "Access-Control-Expose-Headers": "X-Export-Max-Id, X-Export-Row-Count",
+    }
+    return StreamingResponse(_generate(), media_type="text/csv", headers=headers)
+
+
+@app.delete("/api/settings/data/exported")
+def clear_exported_data(req: ExportedClearRequest, request: Request):
+    _require_auth(request)
+    deleted = db.clear_exported_data(req.max_id)
+    if db.get_export_max_id() is None:
+        lstm.clear_buffer()
+    return {"deleted_rows": deleted}
 
 
 # ---------------------------------------------------------------------------

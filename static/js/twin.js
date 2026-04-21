@@ -36,11 +36,12 @@ const MODULE_POS = {
 };
 
 // ── Scene state ───────────────────────────────────────────────────────────────
+// Module-level singletons — only one scene exists per page load.
 let renderer, scene, camera, controls;
-const indicators  = {};   // location → { mesh: Mesh, light: PointLight, anomalous: false }
-const hitMeshes   = [];   // { mesh: Mesh, location: string }  for raycasting
-let   animClock   = 0;
-let   pointerDown = null;
+const indicators  = {};   // location → { mesh: Mesh, light: PointLight, anomalous: bool }
+const hitMeshes   = [];   // { mesh: Mesh, location: string } — larger invisible spheres for click hit-testing
+let   animClock   = 0;    // monotonically increasing value driven by the rAF loop (≈ seconds)
+let   pointerDown = null; // tracks pointer start position to distinguish click vs. drag
 let   pointerMoved = false;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -215,6 +216,9 @@ window.twinInit = function (container, onModuleClick) {
   _animate();
 };
 
+// Called by app.js whenever locationStates changes (WS "state" or "tick" messages).
+// Updates indicator sphere color and point light color for each module.
+// Setting both .color and .emissive to the same hue gives the glow-orb appearance.
 window.twinUpdate = function (locationStates) {
   Object.entries(locationStates).forEach(([loc, state]) => {
     const ind = indicators[loc];
@@ -507,23 +511,27 @@ function _buildEarthGlow() {
 }
 
 // ── Animation loop ────────────────────────────────────────────────────────────
+// Runs at the display refresh rate via requestAnimationFrame.
+// animClock advances by ≈0.016 per frame (~60 fps). The sin() oscillators use
+// different frequencies: 3.5 rad/s = fast fault pulse, 1.2 rad/s = slow nominal breathe.
 function _animate() {
   requestAnimationFrame(_animate);
   animClock += 0.016;
 
-  // Pulse anomalous indicators; breathe nominal ones subtly
   Object.values(indicators).forEach(({ mesh, light, anomalous }) => {
     if (anomalous) {
+      // Fast red pulse to draw operator attention to faulted module
       const p = 0.5 + 0.5 * Math.sin(animClock * 3.5);
       mesh.material.emissiveIntensity = 0.6 + 1.4 * p;
       light.intensity = 2.5 + 3.5 * p;
     } else {
+      // Slow green breathe for nominal modules — subtle, not distracting
       const b = 0.5 + 0.5 * Math.sin(animClock * 1.2);
       mesh.material.emissiveIntensity = 0.8 + 0.4 * b;
       light.intensity = 1.6 + 0.8 * b;
     }
   });
 
-  controls.update();
+  controls.update();   // required for damping and autoRotate to work
   renderer.render(scene, camera);
 }

@@ -30,14 +30,18 @@ class MLPipeline:
         self._load(if_path, rf_path)
 
     def _load(self, if_path: str, rf_path: str):
+        """Load both models at startup. Sets self.enabled = True only if both load successfully.
+        If either model file is missing the server starts normally and returns nominal (1, None)
+        from predict() — the frontend degrades gracefully when ml_enabled is False."""
         try:
             if_data = joblib.load(if_path)
             if isinstance(if_data, dict):
+                # New format: bundle includes model, StandardScaler, and param ordering
                 self.if_model = if_data["model"]
                 self.scaler = if_data.get("scaler")
                 self.param_order = if_data.get("param_order", list(constants.PARAMETER_NOMINAL_RANGES.keys()))
             else:
-                # Legacy: bare model without scaler
+                # Legacy: bare model without scaler (pre-v2 training scripts)
                 self.if_model = if_data
                 self.param_order = list(constants.PARAMETER_NOMINAL_RANGES.keys())
 
@@ -58,30 +62,39 @@ class MLPipeline:
 
     def predict(self, sensor_dict: dict) -> tuple[int, dict | None]:
         """
-        Run the two-stage IF → RF inference pipeline.
+        Two-stage IF → RF inference pipeline:
+
+        Stage 1 — Isolation Forest (anomaly detection):
+            Scores the reading against the learned nominal distribution.
+            Returns 1 (nominal) or -1 (anomalous). Uses StandardScaler-transformed
+            features so the IF operates in a normalised feature space.
+
+        Stage 2 — Random Forest (fault classification):
+            Runs ONLY when IF flags anomalous (-1). Returns per-class probabilities
+            for all known fault types. Uses raw (unscaled) features because the RF
+            was trained that way — DO NOT scale before passing to RF.
 
         Returns:
             (if_label, rf_classification)
             if_label: 1 = nominal, -1 = anomalous
-            rf_classification: dict of {fault_name: probability} or None
+            rf_classification: {fault_name: probability} or None if nominal
         """
         if not self.enabled:
             return 1, None
 
         try:
-            # Build feature vector in training parameter order
+            # Build feature vector aligned to training parameter order (missing params → 0)
             X_raw = np.array([[
                 sensor_dict.get(p, 0.0) for p in self.param_order
             ]])
 
-            # Scale if scaler is available
+            # IF uses scaled features; RF uses raw (training setup difference)
             X_input = self.scaler.transform(X_raw) if self.scaler else X_raw
 
             if_label = int(self.if_model.predict(X_input)[0])
 
             rf_classification = None
             if if_label == -1:
-                # Use raw (unscaled) features for RF (matches training setup)
                 probs = self.rf_model.predict_proba(X_raw)[0]
                 rf_classification = {
                     cls: round(float(prob), 4)
@@ -95,7 +108,8 @@ class MLPipeline:
             return 1, None
 
     def anomaly_score(self, sensor_dict: dict) -> float:
-        """Return the raw IF decision function score (more negative = more anomalous)."""
+        """Return the raw IF decision function score (more negative = more anomalous).
+        Used by DQNRecommender as one of the scalar inputs to the state vector."""
         if not self.enabled or self.if_model is None:
             return 0.0
         try:

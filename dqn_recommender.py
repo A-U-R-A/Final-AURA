@@ -24,7 +24,7 @@ N_ACTIONS  = len(constants.ACTIONS_TO_TAKE)            # 11
 _FAULT_TO_ACTION: dict[str, str] = {
     fault: action for action, fault in constants.ACTIONS_TO_FAULT.items()
 }
-RF_BYPASS_THRESHOLD = 0.85   # RF confidence above which we skip the DQN
+RF_BYPASS_THRESHOLD = 0.92   # RF confidence above which we skip the DQN (↑ from 0.85)
 
 
 class DQNNet(nn.Module):
@@ -77,21 +77,37 @@ class DQNRecommender:
         failure_prob:      float,
         rul_hours:         float,
     ) -> np.ndarray:
+        """Build the 32-dimensional state vector fed to the DQN.
+
+        Layout (STATE_SIZE = 32):
+          [0:20]  sensor values — z-scored with training-set mean/std
+          [20:28] RF per-fault probabilities — 0.0 when IF nominal (no RF output)
+          [28:32] scalar context:
+                    [28] anomaly score proxy: clip(-score/10, 0, 1) — larger = more anomalous
+                    [29] IF anomaly flag: 1.0 if label == -1 else 0.0
+                    [30] failure_prob from LSTM (or RF-proxy when LSTM buffer filling)
+                    [31] RUL normalised: clip(rul, 0, 200) / 200
+
+        The z-scoring uses the same scaler trained alongside the DQN so the model
+        sees the same distribution it was trained on."""
+        # Z-score sensor readings to match training distribution
         sensors = np.array(
             [sensor_data.get(p, 0.0) for p in self.param_order], dtype=np.float32
         )
         sensors = (sensors - self.scaler_mean) / (self.scaler_std + 1e-8)
 
+        # Align RF probabilities to the fixed fault ordering from training
         rf_probs = np.zeros(N_FAULTS, dtype=np.float32)
         if rf_classification:
             for i, fault in enumerate(self.faults):
                 rf_probs[i] = rf_classification.get(fault, 0.0)
 
+        # Scalar context: normalise each to [0, 1] range the DQN expects
         scalars = np.array([
-            float(np.clip(-anomaly_score / 10.0, 0.0, 1.0)),  # more negative = more anomalous
-            float(if_label == -1),
-            float(np.clip(failure_prob, 0.0, 1.0)),
-            float(np.clip(rul_hours, 0.0, 200.0) / 200.0),
+            float(np.clip(-anomaly_score / 10.0, 0.0, 1.0)),  # IF decision score (negative = anomalous)
+            float(if_label == -1),                              # binary anomaly flag
+            float(np.clip(failure_prob, 0.0, 1.0)),            # LSTM failure probability
+            float(np.clip(rul_hours, 0.0, 200.0) / 200.0),    # RUL capped at 200 h and normalised
         ], dtype=np.float32)
 
         return np.concatenate([sensors, rf_probs, scalars])
@@ -136,11 +152,14 @@ class DQNRecommender:
 
         state  = self._encode(sensor_data, anomaly_score, if_label,
                                rf_classification, failure_prob, rul_hours)
-        tensor = torch.tensor(state).unsqueeze(0)
+        tensor = torch.tensor(state).unsqueeze(0)   # (1, STATE_SIZE) — batch dim for the linear layers
         with torch.no_grad():
-            q = self.model(tensor).squeeze(0).numpy()
+            q = self.model(tensor).squeeze(0).numpy()   # raw Q-values for each action
 
-        idx  = int(np.argmax(q))
+        idx  = int(np.argmax(q))    # greedy action selection
+
+        # Softmax over Q-values gives a pseudo-probability distribution for the "confidence" metric.
+        # Subtracting max before exp prevents overflow while leaving argmax unchanged.
         e    = np.exp(q - q.max())
         prob = e / e.sum()
 

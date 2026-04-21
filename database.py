@@ -7,6 +7,20 @@ import constants
 
 
 class Database:
+    """
+    SQLite persistence layer for AURA.
+
+    Schema (created on first run):
+        faults          — lookup table of fault names
+        locations       — ISS module registry; holds current_fault_id FK
+        generated_data  — timestamped sensor readings (JSON blob per row)
+        anomaly_labels  — IF label + RF classification attached to each reading
+        alerts          — fired alert log with severity and acknowledgement state
+
+    All connections use WAL journal mode for concurrent read/write safety
+    (the background loop writes while REST handlers read simultaneously).
+    """
+
     def __init__(self, db_path: str = constants.DATABASE_PATH):
         self.db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -14,6 +28,9 @@ class Database:
 
     @contextmanager
     def _connect(self):
+        """Open a connection, yield it, then close — used as a with-block context manager.
+        check_same_thread=False is safe because each call opens its own connection object.
+        Row factory enables column-name access (row["col"]) instead of positional indexing."""
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
@@ -24,6 +41,8 @@ class Database:
             conn.close()
 
     def _init_schema(self):
+        """Create tables if they don't exist and seed fault/location rows from constants.
+        Idempotent — safe to call every startup."""
         with self._connect() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS faults (
@@ -87,6 +106,8 @@ class Database:
     # Helpers
     # ------------------------------------------------------------------
     def _location_id(self, conn: sqlite3.Connection, location_name: str) -> int:
+        """Resolve a location name to its integer PK. Raises if the name is unknown.
+        Callers pass the same connection so the lookup runs in the same transaction."""
         row = conn.execute(
             "SELECT id FROM locations WHERE location_name = ?", (location_name,)
         ).fetchone()
@@ -152,6 +173,28 @@ class Database:
             )
             conn.commit()
 
+    def get_export_max_id(self) -> int | None:
+        with self._connect() as conn:
+            return conn.execute("SELECT MAX(id) FROM generated_data").fetchone()[0]
+
+    def get_row_count_up_to(self, max_id: int) -> int:
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM generated_data WHERE id <= ?", (max_id,)
+            ).fetchone()[0]
+
+    def clear_exported_data(self, max_id: int) -> int:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM anomaly_labels WHERE data_row_id IN "
+                "(SELECT id FROM generated_data WHERE id <= ?)", (max_id,)
+            )
+            cur = conn.execute(
+                "DELETE FROM generated_data WHERE id <= ?", (max_id,)
+            )
+            conn.commit()
+            return cur.rowcount
+
     def clear_data(self):
         with self._connect() as conn:
             conn.executescript(
@@ -180,7 +223,9 @@ class Database:
             return row["fault_name"] if row else None
 
     def get_all_location_states(self) -> dict:
-        """Return {location: {is_anomalous, active_fault}} for all locations."""
+        """Return {location: {is_anomalous, active_fault}} for all locations.
+        The correlated sub-select grabs only the most-recent data row per location
+        so the JOIN doesn't pull every row into memory."""
         with self._connect() as conn:
             rows = conn.execute(
                 """SELECT l.location_name,
@@ -226,13 +271,15 @@ class Database:
         }
 
     def get_history(self, location_name: str, parameter: str, n: int = 50) -> list:
-        """Return last n [timestamp, value] pairs for a parameter at a location."""
+        """Return last n readings for a parameter, including the IF anomaly label for table highlighting."""
         with self._connect() as conn:
             loc_id = self._location_id(conn, location_name)
             rows = conn.execute(
-                """SELECT timestamp, data FROM generated_data
-                   WHERE location_id = ?
-                   ORDER BY timestamp DESC LIMIT ?""",
+                """SELECT gd.timestamp, gd.data, al.isolation_forest_label
+                   FROM generated_data gd
+                   LEFT JOIN anomaly_labels al ON al.data_row_id = gd.id
+                   WHERE gd.location_id = ?
+                   ORDER BY gd.timestamp DESC LIMIT ?""",
                 (loc_id, n),
             ).fetchall()
         results = []
@@ -240,7 +287,11 @@ class Database:
             try:
                 d = json.loads(r["data"])
                 if parameter in d:
-                    results.append({"timestamp": r["timestamp"], "value": d[parameter]})
+                    results.append({
+                        "timestamp": r["timestamp"],
+                        "value": d[parameter],
+                        "anomalous": r["isolation_forest_label"] == -1,
+                    })
             except Exception:
                 continue
         return results
@@ -269,10 +320,6 @@ class Database:
                 "rf_classification": json.loads(r["random_forest_classification"] or "null"),
             })
         return results
-
-    def get_data_for_prompt(self, location_name: str, n: int = 10) -> list:
-        """Return recent readings formatted for LLM prompt."""
-        return self.get_recent_readings(location_name, n)
 
     def get_row_count(self) -> int:
         with self._connect() as conn:
@@ -308,6 +355,8 @@ class Database:
 
     def get_alerts(self, location_name: str = None, limit: int = 100,
                    unacked_only: bool = False) -> list:
+        """Build a dynamic WHERE clause from optional filters then execute.
+        params list is built in the same order as the placeholder ?s."""
         with self._connect() as conn:
             where_clauses = []
             params = []

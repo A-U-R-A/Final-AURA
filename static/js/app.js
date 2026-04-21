@@ -6,23 +6,32 @@
 "use strict";
 
 // ── State ────────────────────────────────────────────────────────────────────
+// ── Application state ─────────────────────────────────────────────────────────
+// Single source of truth for all UI state. Mutated by WebSocket messages and
+// REST responses; read by render functions whenever the page is refreshed.
 const state = {
-  config: null,
-  locationStates: {},   // {location: {is_anomalous, active_fault}}
-  dqnRecs: {},          // {location: {action, action_index, confidence}}
-  locationData: {},     // {location: {param: value, ...}} latest sensor readings
-  ws: null,
+  config: null,                // /api/config payload (locations, ranges, units, etc.)
+  locationStates: {},          // {location: {is_anomalous, active_fault, latched}}
+  dqnRecs: {},                 // {location: {action, action_index, confidence}} — from WS ticks
+  lstmRecs: {},                // {location: {failure_prob, rul_hours}} — from WS ticks
+  locationData: {},            // {location: {param: value}} — latest sensor readings
+  ws: null,                    // active WebSocket instance
   wsConnected: false,
-  activePage: "twin",
-  detailChart: null,
-  detailLiveBuffer: [],  // pending live readings for current detail view
-  detailLive: true,
+  activePage: "twin",          // currently visible tab
+  detailChart: null,           // Chart.js instance in the drilldown view (destroyed on each load)
+  detailLive: true,            // whether live WS ticks push new points to the drilldown chart
+  detailMiniCharts: {},        // {param: Chart instance} — sparklines in overview grid
+  detailDrillParam: null,      // param currently open in drilldown (null = overview mode)
+  detailPendingDrill: null,    // param to drill into after overview finishes loading
+  detailAnomalyFlags: [],      // bool[] parallel to drilldown chart data — true = IF anomalous
 };
 
 // ── DOM references ───────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
+// Called once on DOMContentLoaded. Fetches static config then initialises every
+// page section before opening the WebSocket for live data.
 async function boot() {
   try {
     state.config = await apiFetch("/api/config");
@@ -40,12 +49,13 @@ async function boot() {
   buildAlerts();
   buildAnalyst();
   buildMaintenance();
+  buildSettings();
   connectWebSocket();
 
-  // Load initial data
+  // Load initial location states before any WS tick arrives
   await refreshLocationStates();
   refreshAlertBadge();
-  // Keep alert badge in sync every 30 s (covers any missed WS alert messages)
+  // Poll alert count every 30 s as a fallback in case a WS alert message is missed
   setInterval(refreshAlertBadge, 30_000);
 }
 
@@ -60,6 +70,7 @@ function setupTabs() {
       $(`page-${page}`).classList.add("active");
       state.activePage = page;
       if (page === "dashboard") refreshDashboard();
+      if (page === "detail")    loadDetailOverview();
       if (page === "trends")    refreshTrends();
       if (page === "alerts")    refreshAlerts();
       if (page === "analyst")     refreshAnalystLabels();
@@ -86,9 +97,10 @@ async function refreshAlertBadge() {
 function populateSelects() {
   const { locations, faults } = state.config;
 
-  // Twin sidebar
-  populateSelect("inject-location", locations);
-  populateSelect("inject-fault", faults);
+  // Settings faults tab
+  populateSelect("s-inject-location", locations);
+  populateSelect("s-inject-fault", faults);
+  _updateFaultDesc();
 
   // Dashboard
   $("btn-dashboard-refresh").addEventListener("click", refreshDashboard);
@@ -96,7 +108,6 @@ function populateSelects() {
   // Detail
   populateSelect("detail-location", locations);
   $("detail-location").addEventListener("change", onDetailLocationChange);
-  onDetailLocationChange();  // populate parameters
 
   // Trends
   populateSelect("trends-location", locations);
@@ -117,6 +128,9 @@ function populateSelect(id, items) {
 }
 
 // ── WebSocket ────────────────────────────────────────────────────────────────
+// Opens a persistent connection to /ws/live. On disconnect, schedules a
+// reconnection attempt after 3 s. The 25-second keepalive ping prevents idle
+// proxies (e.g. nginx) from closing the connection due to inactivity timeout.
 function connectWebSocket() {
   const wsUrl = `ws://${location.host}/ws/live`;
   state.ws = new WebSocket(wsUrl);
@@ -130,6 +144,7 @@ function connectWebSocket() {
   state.ws.addEventListener("close", () => {
     state.wsConnected = false;
     $("ws-indicator").className = "ws-indicator disconnected";
+    // Auto-reconnect after 3 s — the server sends the current state snapshot on connect
     setTimeout(connectWebSocket, 3000);
   });
 
@@ -145,7 +160,7 @@ function connectWebSocket() {
     } catch (_) {}
   });
 
-  // Keepalive ping every 25s
+  // Keepalive ping every 25 s — avoids idle proxy timeouts
   setInterval(() => {
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
       state.ws.send("ping");
@@ -153,8 +168,14 @@ function connectWebSocket() {
   }, 25000);
 }
 
+// ── WebSocket message router ──────────────────────────────────────────────────
+// Three server-sent message types:
+//   "state"  — full location snapshot (sent once on connect + after each full tick batch)
+//   "alert"  — debounced/latched fault alert (triggers toast + optional latch popup)
+//   "tick"   — per-location per-tick data (sensor values, IF/RF labels, DQN recommendation)
 function handleWsMessage(msg) {
   if (msg.type === "state") {
+    // Replace entire locationStates map and refresh all state-dependent UI
     state.locationStates = msg.locations || {};
     updateSystemStatusBadge();
     updateTwinIndicators();
@@ -165,30 +186,64 @@ function handleWsMessage(msg) {
     const probText  = msg.top_prob ? ` (${(msg.top_prob * 100).toFixed(0)}%)` : "";
     showToast(`⚠ ${msg.severity}: ${faultText}${probText} @ ${msg.location}`, "error");
     refreshAlertBadge();
+    // Latch alerts get a modal popup (and optional alarm) in addition to the toast
     if (msg.latched) {
       showLatchPopup(msg.location, faultText, msg.top_prob || 0);
     }
 
   } else if (msg.type === "tick") {
-    // Cache live sensor data and DQN per location
+    // Cache latest sensor readings and DQN recommendation for this location
     if (msg.data) state.locationData[msg.location] = msg.data;
-    if (msg.dqn)  state.dqnRecs[msg.location] = msg.dqn;
-    // Keep locationStates current for active_fault checks in card updates
+    if (msg.dqn)  state.dqnRecs[msg.location]  = msg.dqn;
+    if (msg.lstm) state.lstmRecs[msg.location] = msg.lstm;
+    // Merge fault/anomaly state so dashboard cards stay accurate without waiting for "state"
     if (!state.locationStates[msg.location]) state.locationStates[msg.location] = {};
     state.locationStates[msg.location].active_fault = msg.active_fault || null;
     state.locationStates[msg.location].is_anomalous = msg.if_label === -1;
+
+    // Only update dashboard cards in-place when the dashboard is visible — avoids
+    // touching the DOM for pages the user isn't looking at
     if (state.activePage === "dashboard") {
-      updateLocationCardInPlace(msg.location, msg.data, msg.dqn, msg.if_label);
+      updateLocationCardInPlace(msg.location, msg.data, msg.dqn, msg.lstm, msg.if_label);
     }
-    // Live detail chart update
-    if (state.activePage === "detail" && state.detailLive) {
+    // Update detail page live — mini-chart sparklines in overview, or drilldown chart
+    if (state.activePage === "detail" && state.detailLive && msg.data) {
       const loc = $("detail-location").value;
-      const param = $("detail-parameter").value;
-      if (msg.location === loc && msg.data && param in msg.data) {
-        pushDetailPoint(msg.timestamp, msg.data[param], msg.if_label === -1);
+      if (msg.location === loc) {
+        // Update every sparkline that has data for this tick
+        Object.entries(msg.data).forEach(([param, value]) => {
+          const chart = state.detailMiniCharts[param];
+          if (!chart) return;
+          const label = msg.timestamp.split("T")[1].split(".")[0];
+          chart.data.labels.push(label);
+          chart.data.datasets[0].data.push(value);
+          if (chart.data.labels.length > 50) {
+            chart.data.labels.shift();
+            chart.data.datasets[0].data.shift();
+          }
+          chart.update("none");
+          // Refresh the value label on the card
+          const safeId = `mini-chart-${param.replace(/[^a-zA-Z0-9]/g, "_")}`;
+          const canvas = document.getElementById(safeId);
+          if (canvas) {
+            const valEl = canvas.closest(".detail-mini-card")?.querySelector(".detail-mini-val");
+            if (valEl) {
+              const range = state.config.parameter_nominal_ranges[param];
+              const unit  = state.config.parameter_units[param] || "";
+              const isOut = range && (value < range[0] || value > range[1]);
+              valEl.textContent = formatVal(value, param) + "\u00a0" + unit;
+              valEl.className = `detail-mini-val${isOut ? " anomalous" : ""}`;
+            }
+          }
+        });
+        // Also push to the drilldown chart if one is open
+        const drillParam = state.detailDrillParam;
+        if (drillParam && drillParam in msg.data) {
+          pushDetailPoint(msg.timestamp, msg.data[drillParam], msg.if_label === -1);
+        }
       }
     }
-    // Live analyst labels update
+    // Prepend to the anomaly labels sidebar in the Analyst page
     if (state.activePage === "analyst") {
       const loc = $("analyst-location").value;
       if (loc === "all" || msg.location === loc) prependAnalystLabel(msg);
@@ -250,7 +305,6 @@ function buildDigitalTwin() {
     if (typeof window.twinInit === "function") {
       window.twinInit(container, loc => {
         $("detail-location").value = loc;
-        onDetailLocationChange();
         document.querySelector('.tab[data-page="detail"]').click();
       });
       // Push current state immediately if already loaded
@@ -263,14 +317,11 @@ function buildDigitalTwin() {
   }
   tryInit();
 
-  $("btn-inject").addEventListener("click", injectFault);
   $("btn-reset-camera").addEventListener("click", () => {
     if (typeof window.twinResetCamera === "function") {
       window.twinResetCamera();
     }
   });
-  $("btn-clear-faults").addEventListener("click", clearAllFaults);
-  $("btn-clear-data").addEventListener("click", clearData);
   $("latch-popup-dismiss").addEventListener("click", dismissLatchPopup);
 }
 
@@ -294,7 +345,6 @@ function updateLocationList() {
     `;
     item.addEventListener("click", () => {
       $("detail-location").value = loc;
-      onDetailLocationChange();
       document.querySelector('.tab[data-page="detail"]').click();
     });
     list.appendChild(item);
@@ -302,8 +352,8 @@ function updateLocationList() {
 }
 
 async function injectFault() {
-  const location = $("inject-location").value;
-  const fault = $("inject-fault").value;
+  const location = $("s-inject-location").value;
+  const fault = $("s-inject-fault").value;
   try {
     await apiPost("/api/faults/inject", { location, fault });
     showToast(`Fault injected: ${fault} @ ${location}`, "info");
@@ -389,6 +439,10 @@ async function refreshDashboard() {
   locations.forEach(loc => grid.appendChild(makeLocationCard(loc)));
 }
 
+// Classify a raw sensor value against its nominal range and return bar/value CSS classes.
+// Three zones: nominal (inside range), warning (outside range but within 10% margin),
+// critical (more than 10% of span outside range). Used by both makeLocationCard and
+// updateLocationCardInPlace to keep styling logic in one place.
 function _sensorBarInfo(raw, range) {
   if (raw === undefined || range === undefined) {
     return { pct: 0, barCls: "bar-empty", valCls: "muted" };
@@ -402,10 +456,20 @@ function _sensorBarInfo(raw, range) {
   return { pct, barCls: "bar-nominal", valCls: "nominal" };
 }
 
+function _lstmStatusInfo(lstm) {
+  if (!lstm) return { label: "—", cls: "muted" };
+  const p = lstm.failure_prob;
+  if (p < 0.25) return { label: "NOMINAL", cls: "nominal" };
+  if (p < 0.50) return { label: "WATCH",   cls: "warning" };
+  if (p < 0.75) return { label: "CAUTION", cls: "warning" };
+  return             { label: "CRITICAL", cls: "critical" };
+}
+
 function makeLocationCard(loc) {
   const locState  = state.locationStates[loc] || {};
   const sensorData = state.locationData[loc]  || {};
   const dqnRec    = state.dqnRecs[loc];
+  const lstmRec   = state.lstmRecs[loc];
   const { parameter_nominal_ranges, parameter_units } = state.config;
 
   const activeFault = locState.active_fault;
@@ -434,6 +498,8 @@ function makeLocationCard(loc) {
     const cls    = isNoop ? "nominal" : dqnRec.confidence >= 0.7 ? "critical" : "warning";
     dqnHtml = `<span class="loc-dqn ${cls}">DQN: ${dqnRec.action} (${conf}%)</span>`;
   }
+  const { label: lstmLabel, cls: lstmCls } = _lstmStatusInfo(lstmRec);
+  const lstmHtml = `<span class="loc-lstm ${lstmCls}">LSTM: ${lstmLabel}</span>`;
 
   const isLatched = !!(locState.latched);
   const faultHtml = activeFault
@@ -456,15 +522,13 @@ function makeLocationCard(loc) {
     </div>
     ${faultHtml}
     <div class="loc-card-sensors">${sensorRowsHtml}</div>
-    <div class="loc-card-footer">${dqnHtml}</div>
+    <div class="loc-card-footer">${dqnHtml}${lstmHtml}</div>
   `;
 
   card.addEventListener("click", (e) => {
     if (e.target.classList.contains("resolve-latch-btn")) return;
     $("detail-location").value = loc;
-    onDetailLocationChange();
     document.querySelector('.tab[data-page="detail"]').click();
-    loadDetailChart();
   });
 
   const resolveBtn = card.querySelector(".resolve-latch-btn");
@@ -485,7 +549,7 @@ function makeLocationCard(loc) {
   return card;
 }
 
-function updateLocationCardInPlace(loc, sensorData, dqnRec, ifLabel) {
+function updateLocationCardInPlace(loc, sensorData, dqnRec, lstmRec, ifLabel) {
   const cardId = `loc-card-${loc.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "")}`;
   const card = document.getElementById(cardId);
   if (!card) return;
@@ -561,31 +625,34 @@ function updateLocationCardInPlace(loc, sensorData, dqnRec, ifLabel) {
       dqnEl.textContent = `DQN: ${dqnRec.action} (${conf}%)`;
     }
   }
+
+  // Update LSTM status
+  if (lstmRec) {
+    const lstmEl = card.querySelector(".loc-lstm");
+    if (lstmEl) {
+      const { label, cls } = _lstmStatusInfo(lstmRec);
+      lstmEl.className = `loc-lstm ${cls}`;
+      lstmEl.textContent = `LSTM: ${label}`;
+    }
+  }
 }
 
 // ============================================================
 //  DETAIL PAGE
 // ============================================================
 function onDetailLocationChange() {
-  const loc = $("detail-location").value;
-  const paramSel = $("detail-parameter");
-  const allParams = Object.values(state.config.subsystem_parameters).flat();
-  paramSel.innerHTML = "";
-  allParams.forEach(p => {
-    const opt = document.createElement("option");
-    opt.value = p;
-    opt.textContent = p;
-    paramSel.appendChild(opt);
-  });
+  closeDetailDrilldown();
+  loadDetailOverview();
 }
 
 function buildDetail() {
-  $("btn-detail-load").addEventListener("click", loadDetailChart);
+  $("btn-detail-back").addEventListener("click", closeDetailDrilldown);
+  $("btn-detail-reload").addEventListener("click", loadDetailChart);
   $("detail-live").addEventListener("change", e => {
     state.detailLive = e.target.checked;
   });
 
-  // Register custom interaction mode for chart hover tolerance
+  // Register custom interaction mode for drilldown chart hover tolerance
   const Interaction = Chart.Interaction;
   Interaction.modes.customTolerance = function(chart, e, options, useFinalPosition) {
     const position = Chart.helpers.getRelativePosition(e, chart);
@@ -608,15 +675,132 @@ function buildDetail() {
   };
 }
 
+async function loadDetailOverview() {
+  const loc = $("detail-location").value;
+  if (!loc) return;
+
+  const grid = $("detail-mini-grid");
+  grid.innerHTML = '<div class="loading">Loading…</div>';
+
+  // Destroy existing sparklines before rebuilding
+  Object.values(state.detailMiniCharts).forEach(c => c.destroy());
+  state.detailMiniCharts = {};
+
+  const allParams = Object.values(state.config.subsystem_parameters).flat();
+
+  const results = await Promise.allSettled(
+    allParams.map(p =>
+      apiFetch(`/api/location/${encodeURIComponent(loc)}/history?parameter=${encodeURIComponent(p)}&n=50`)
+    )
+  );
+
+  grid.innerHTML = "";
+  allParams.forEach((param, i) => {
+    const history = results[i].status === "fulfilled" ? results[i].value : [];
+    grid.appendChild(buildMiniCard(param, history));
+  });
+
+  // Status badge
+  const locState = state.locationStates[loc] || {};
+  const statusEl = $("detail-ov-status");
+  if (locState.active_fault) {
+    statusEl.textContent = `⚠ ${locState.active_fault}`;
+    statusEl.className = "detail-ov-status fault";
+  } else if (locState.is_anomalous) {
+    statusEl.textContent = "ANOMALOUS";
+    statusEl.className = "detail-ov-status anomalous";
+  } else {
+    statusEl.textContent = "NOMINAL";
+    statusEl.className = "detail-ov-status nominal";
+  }
+
+  // Open drilldown if a caller queued one before overview was loaded
+  if (state.detailPendingDrill) {
+    const p = state.detailPendingDrill;
+    state.detailPendingDrill = null;
+    openDetailDrilldown(p);
+  }
+}
+
+function buildMiniCard(param, history) {
+  const range = state.config.parameter_nominal_ranges[param];
+  const unit  = state.config.parameter_units[param] || "";
+  const latestVal = history.length ? history[history.length - 1].value : null;
+  const isOut = range && latestVal !== null && (latestVal < range[0] || latestVal > range[1]);
+
+  const card = document.createElement("div");
+  card.className = `detail-mini-card${isOut ? " out-of-range" : ""}`;
+  const safeId = `mini-chart-${param.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  card.innerHTML = `
+    <div class="detail-mini-header">
+      <span class="detail-mini-name">${param}</span>
+      <span class="detail-mini-val${isOut ? " anomalous" : ""}">${latestVal !== null ? formatVal(latestVal, param) + "\u00a0" + unit : "—"}</span>
+    </div>
+    <div class="detail-mini-chart-wrap"><canvas id="${safeId}"></canvas></div>
+  `;
+  card.addEventListener("click", () => openDetailDrilldown(param));
+
+  // Build sparkline after card is in DOM (need canvas reachable)
+  setTimeout(() => {
+    const canvas = document.getElementById(safeId);
+    if (!canvas) return;
+    const labels = history.map(r => r.timestamp.split("T")[1].split(".")[0]);
+    const values = history.map(r => r.value);
+    const color  = isOut ? "#ff5252" : "#00e676";
+    const chart  = new Chart(canvas.getContext("2d"), {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          borderColor: color,
+          backgroundColor: isOut ? "rgba(255,82,82,.08)" : "rgba(0,230,118,.06)",
+          borderWidth: 1,
+          pointRadius: 0,
+          tension: 0.3,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        scales: { x: { display: false }, y: { display: false } },
+      },
+    });
+    state.detailMiniCharts[param] = chart;
+  }, 0);
+
+  return card;
+}
+
+function openDetailDrilldown(param) {
+  state.detailDrillParam = param;
+  $("detail-parameter").value = param;
+  const loc = $("detail-location").value;
+  $("detail-dd-title").textContent = `${loc} — ${param}`;
+  $("detail-overview").classList.add("hidden");
+  $("detail-drilldown").classList.remove("hidden");
+  loadDetailChart();
+}
+
+function closeDetailDrilldown() {
+  state.detailDrillParam = null;
+  state.detailAnomalyFlags = [];
+  $("detail-drilldown").classList.add("hidden");
+  $("detail-overview").classList.remove("hidden");
+}
+
 async function loadDetailChart() {
   const loc   = $("detail-location").value;
-  const param = $("detail-parameter").value;
+  const param = state.detailDrillParam;
   const n     = parseInt($("detail-n").value, 10);
+  if (!param) return;
 
   let history;
   try {
     history = await apiFetch(
-      `/api/location/${encodeURIComponent(loc)}/history/${encodeURIComponent(param)}?n=${n}`
+      `/api/location/${encodeURIComponent(loc)}/history?parameter=${encodeURIComponent(param)}&n=${n}`
     );
   } catch (e) {
     showToast(`Error loading history: ${e.message}`, "error");
@@ -626,17 +810,20 @@ async function loadDetailChart() {
   const labels = history.map(r => r.timestamp.split("T")[1].split(".")[0]);
   const values = history.map(r => r.value);
 
+  // Maintain a parallel bool array — callback reads it fresh each render, never gets out of sync
+  state.detailAnomalyFlags = history.map(r => !!r.anomalous);
+
   $("detail-table-param-header").textContent = param;
 
-  // Nominal range bands
   const range = state.config.parameter_nominal_ranges[param];
   const unit  = state.config.parameter_units[param] || "";
 
-  const ctx = $("detail-chart").getContext("2d");
+  const ptColor = ctx => state.detailAnomalyFlags[ctx.dataIndex] ? "#ff3d40" : "#00e676";
 
+  const ctx2d = $("detail-chart").getContext("2d");
   if (state.detailChart) state.detailChart.destroy();
 
-  state.detailChart = new Chart(ctx, {
+  state.detailChart = new Chart(ctx2d, {
     type: "line",
     data: {
       labels,
@@ -647,8 +834,10 @@ async function loadDetailChart() {
           borderColor: "#00e676",
           backgroundColor: "rgba(0,230,118,.08)",
           borderWidth: 1.5,
-          pointRadius: 2,
-          pointHoverRadius: 4,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          pointBackgroundColor: ptColor,
+          pointBorderColor: ptColor,
           tension: 0.2,
         },
         range && {
@@ -676,19 +865,22 @@ async function loadDetailChart() {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      interaction: {
-        mode: "customTolerance",
-        radius: 5,
-      },
+      interaction: { mode: "customTolerance", radius: 5 },
       plugins: {
-        legend: {
-          labels: { color: "#8499ac", font: { size: 10 } },
+        legend: { labels: { color: "#8499ac", font: { size: 10 } } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const r = history[ctx.dataIndex];
+              const flag = r && r.anomalous ? " ⚠ ANOMALOUS" : "";
+              return ` ${formatVal(ctx.parsed.y, param)} ${unit}${flag}`;
+            },
+          },
         },
       },
-
       scales: {
         x: {
-          ticks: { color: "#546478", maxTicksLimit: 10, font: { size: 10 } },
+          ticks: { color: "#546478", maxTicksLimit: 12, font: { size: 10 } },
           grid: { color: "rgba(30,45,66,.8)" },
         },
         y: {
@@ -696,23 +888,29 @@ async function loadDetailChart() {
           grid: { color: "rgba(30,45,66,.8)" },
         },
       },
-    }
+    },
   });
 
-  // Populate table
+  // Populate table — newest first, anomalous rows highlighted
   const tbody = $("detail-table-body");
   tbody.innerHTML = "";
-  history.forEach(r => {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const r  = history[i];
     const tr = document.createElement("tr");
-    const isOut = range && (r.value < range[0] || r.value > range[1]);
+    if (r.anomalous) tr.classList.add("anomalous-row");
     tr.innerHTML = `
       <td>${r.timestamp}</td>
-      <td class="${isOut ? "anomalous" : ""}">${formatVal(r.value, param)}</td>
+      <td class="${r.anomalous ? "anomalous" : ""}">${formatVal(r.value, param)}${r.anomalous ? ' <span class="anom-badge">⚠</span>' : ""}</td>
     `;
-    tbody.insertBefore(tr, tbody.firstChild);
-  });
+    tbody.appendChild(tr);
+  }
 }
 
+// Append one live point to the running detail chart and table.
+// Keeps the window size bounded at `detail-n` points by shifting off the oldest.
+// chart.update("none") skips animation so fast ticks don't cause visual jank.
+// The nominal band datasets (datasets[1] and [2]) are flat lines — they repeat
+// the same value so their length stays in sync with the data dataset.
 function pushDetailPoint(timestamp, value, isAnomalous) {
   if (!state.detailChart) return;
   const chart = state.detailChart;
@@ -721,25 +919,28 @@ function pushDetailPoint(timestamp, value, isAnomalous) {
 
   chart.data.labels.push(label);
   chart.data.datasets[0].data.push(value);
+  state.detailAnomalyFlags.push(isAnomalous);
 
-  // Update nominal bands length
+  // Extend nominal band datasets by repeating their constant value
   chart.data.datasets.slice(1).forEach(ds => {
     if (ds && ds.data.length > 0) ds.data.push(ds.data[0]);
   });
 
+  // Slide window: drop oldest point when over limit
   if (chart.data.labels.length > maxPoints) {
     chart.data.labels.shift();
     chart.data.datasets.forEach(ds => ds.data.shift());
+    state.detailAnomalyFlags.shift();
   }
 
-  chart.update("none");
+  chart.update("none");   // skip animation for smooth live streaming
 
   // Table row
   const tbody = $("detail-table-body");
   const tr = document.createElement("tr");
   tr.innerHTML = `
     <td>${timestamp}</td>
-    <td class="${isAnomalous ? "anomalous" : ""}">${formatVal(value, $("detail-parameter").value)}</td>
+    <td class="${isAnomalous ? "anomalous" : ""}">${formatVal(value, state.detailDrillParam || "")}</td>
   `;
   tbody.insertBefore(tr, tbody.firstChild);
   if (tbody.rows.length > maxPoints) tbody.deleteRow(tbody.rows.length - 1);
@@ -751,6 +952,25 @@ function pushDetailPoint(timestamp, value, isAnomalous) {
 
 let _chatHistory   = [];   // [{role, content}]
 let _chatStreaming  = false;
+
+const _CHAT_STORAGE_KEY = "aura_chat_v1";
+const _CHAT_MAX_STORED  = 40;   // messages (20 turns)
+
+function _saveChatHistory() {
+  try {
+    const trimmed = _chatHistory.slice(-_CHAT_MAX_STORED);
+    localStorage.setItem(_CHAT_STORAGE_KEY, JSON.stringify(trimmed));
+  } catch (_) {}
+}
+
+function _loadChatHistory() {
+  try {
+    const raw = localStorage.getItem(_CHAT_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (_) {
+    return [];
+  }
+}
 
 function buildAnalyst() {
   // Prepend "All Locations" option to the location select
@@ -776,6 +996,13 @@ function buildAnalyst() {
     }
   });
   input.addEventListener("input", _resizeChatInput);
+
+  // Restore previous session from localStorage
+  const saved = _loadChatHistory();
+  if (saved.length) {
+    _chatHistory = saved;
+    saved.forEach(m => _appendMessage(m.role === "user" ? "user" : "ai", m.content));
+  }
 
   // Fetch backend status once on page load
   _refreshBackendBadge();
@@ -803,6 +1030,7 @@ function _updateBackendBadge(backend) {
 // ── Chat helpers ─────────────────────────────────────────────────────────────
 function _clearChat() {
   _chatHistory = [];
+  try { localStorage.removeItem(_CHAT_STORAGE_KEY); } catch (_) {}
   const msgs = $("chat-messages");
   msgs.innerHTML = "";
   const welcome = document.createElement("div");
@@ -922,6 +1150,7 @@ async function _sendChatMessage() {
 
     if (aiText) {
       _chatHistory.push({ role: "assistant", content: aiText });
+      _saveChatHistory();
     }
   } catch (e) {
     contentEl.innerHTML = `<span class="chat-error">Error: ${_escHtml(e.message)}</span>`;
@@ -933,6 +1162,9 @@ async function _sendChatMessage() {
 }
 
 // ── Markdown renderer ────────────────────────────────────────────────────────
+// Lightweight subset renderer — handles fenced code blocks, inline code,
+// bold/italic, headings (h1-h3), unordered and ordered lists, and paragraphs.
+// Does NOT use a full Markdown library to keep the bundle zero-dependency.
 function _escHtml(s) {
   return String(s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -940,7 +1172,7 @@ function _escHtml(s) {
 }
 
 function _renderMarkdown(text) {
-  // Split on fenced code blocks first so we don't mangle code content.
+  // Split on fenced code blocks first so inline Markdown patterns don't corrupt code.
   const parts  = [];
   const codeRe = /```([\w]*)\n?([\s\S]*?)(?:```|$)/g;
   let last = 0, m;
@@ -1038,109 +1270,29 @@ function prependAnalystLabel(msg) {
 }
 
 // ============================================================
-//  DASHBOARD — LSTM PREDICTION BAR
-// ============================================================
-async function refreshPrediction() {
-  const location = $("dashboard-location").value;
-  try {
-    const pred = await apiFetch(`/api/location/${encodeURIComponent(location)}/prediction`);
-    const bar = $("prediction-bar");
-
-    if (!pred.lstm_enabled) {
-      bar.classList.add("hidden");
-      return;
-    }
-
-    bar.classList.remove("hidden");
-
-    if (!pred.ready) {
-      $("pred-failure-prob").textContent = "";
-      $("pred-rul").textContent = "";
-      $("pred-buffer-status").textContent =
-        `Buffer: ${pred.buffer_fill}/${pred.seq_len} (collecting…)`;
-      return;
-    }
-
-    const fp = pred.failure_prob;
-    const fpPct = (fp * 100).toFixed(1);
-    const fpClass = fp < 0.3 ? "pred-fp-nominal" : fp < 0.6 ? "pred-fp-warning" : "pred-fp-critical";
-    $("pred-failure-prob").className = fpClass;
-    $("pred-failure-prob").textContent = `Failure prob: ${fpPct}%`;
-    $("pred-rul").className = "pred-rul";
-    $("pred-rul").textContent = `RUL: ${pred.rul_hours.toFixed(1)} h`;
-    $("pred-buffer-status").textContent = "";
-  } catch (_) {}
-}
-
-// ============================================================
-//  DASHBOARD — DQN RECOMMENDATION BAR
-// ============================================================
-async function refreshRecommendation() {
-  const location = $("dashboard-location").value;
-
-  // Use cached value from WebSocket if available
-  if (state.dqnRecs[location]) {
-    updateDqnBar(state.dqnRecs[location], location);
-    return;
-  }
-
-  // Fall back to REST endpoint (e.g. on first load before any tick arrives)
-  try {
-    const rec = await apiFetch(
-      `/api/location/${encodeURIComponent(location)}/recommendation`
-    );
-    if (rec.dqn_enabled && rec.ready) {
-      state.dqnRecs[location] = rec;
-      updateDqnBar(rec, location);
-    }
-  } catch (_) {}
-}
-
-function updateDqnBar(rec, location) {
-  const bar = $("dqn-bar");
-  if (!rec) { bar.classList.add("hidden"); return; }
-
-  bar.classList.remove("hidden");
-
-  const isDoNothing = rec.action_index === 0;
-  const conf        = (rec.confidence * 100).toFixed(0);
-
-  const actionEl = $("dqn-action");
-  actionEl.textContent = rec.action;
-
-  if (isDoNothing) {
-    actionEl.className = "dqn-action-nominal";
-  } else if (rec.confidence >= 0.7) {
-    actionEl.className = "dqn-action-critical";
-  } else {
-    actionEl.className = "dqn-action-warning";
-  }
-
-  $("dqn-confidence").textContent = `${conf}% confidence`;
-  $("dqn-location").textContent   = location ? `@ ${location}` : "";
-}
-
-// ============================================================
 //  TRENDS PAGE
 // ============================================================
+// ── Trends auto-refresh timer ─────────────────────────────────────────────────
+// Managed entirely by the auto-refresh checkbox. Only one timer runs at a time.
+// Without this discipline, enabling the checkbox while the page timer was already
+// running would create a second 30-second interval causing double refreshes.
 let _trendsAutoTimer = null;
 
 function buildTrends() {
   $("btn-trends-load").addEventListener("click", refreshTrends);
+
+  // Refresh immediately when location changes (only if auto-refresh is on)
   $("trends-location").addEventListener("change", () => {
     if ($("trends-auto").checked) refreshTrends();
   });
+
+  // Toggle the single shared timer on checkbox change
   $("trends-auto").addEventListener("change", e => {
+    clearInterval(_trendsAutoTimer);   // always clear first to avoid duplicates
     if (e.target.checked) {
       _trendsAutoTimer = setInterval(refreshTrends, 30000);
-    } else {
-      clearInterval(_trendsAutoTimer);
     }
   });
-  // Start auto-refresh timer
-  _trendsAutoTimer = setInterval(() => {
-    if (state.activePage === "trends") refreshTrends();
-  }, 30000);
 }
 
 async function refreshTrends() {
@@ -1194,9 +1346,8 @@ async function refreshTrends() {
 
       card.addEventListener("click", () => {
         $("detail-location").value = location;
-        $("detail-parameter").value = t.param;
+        state.detailPendingDrill = t.param;
         document.querySelector('.tab[data-page="detail"]').click();
-        loadDetailChart();
       });
 
       grid.appendChild(card);
@@ -1407,8 +1558,9 @@ function showToast(msg, type = "info") {
 // ============================================================
 //  LATCH ALERT POPUP & ALARM
 // ============================================================
-
-// Set to true to enable the alarm sound when a fault is latched.
+// Shown when the backend broadcasts a "latched" alert (RF confidence >= 90%).
+// The popup blocks the UI until dismissed; the optional Web Audio klaxon provides
+// an audible warning. Set ALARM_SOUND_ENABLED = true to activate the sound.
 const ALARM_SOUND_ENABLED = false;
 
 let _alarmCtx = null;
@@ -1463,6 +1615,512 @@ function showLatchPopup(location, faultType, confidence) {
 function dismissLatchPopup() {
   $("latch-overlay").classList.add("hidden");
   _stopAlarm();
+}
+
+// ============================================================
+//  SETTINGS PAGE
+// ============================================================
+
+const _SETTINGS_TOKEN_KEY = "aura_settings_token";
+let _exportMaxId = null;
+
+function _settingsToken()         { return sessionStorage.getItem(_SETTINGS_TOKEN_KEY); }
+function _settingsAuthHeader()    { return { "Authorization": `Bearer ${_settingsToken()}` }; }
+function _settingsClearToken()    { sessionStorage.removeItem(_SETTINGS_TOKEN_KEY); }
+function _settingsSaveToken(tok)  { sessionStorage.setItem(_SETTINGS_TOKEN_KEY, tok); }
+
+async function _settingsFetch(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { "Content-Type": "application/json", ..._settingsAuthHeader(), ...(opts.headers || {}) },
+  });
+  if (res.status === 401) {
+    _settingsClearToken();
+    _showSettingsLogin();
+    throw new Error("Session expired");
+  }
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+async function _settingsExportCsv() {
+  const res = await fetch("/api/settings/data/export/csv", {
+    headers: { "Authorization": `Bearer ${_settingsToken()}` },
+  });
+  if (res.status === 401) {
+    _settingsClearToken();
+    _showSettingsLogin();
+    throw new Error("Session expired");
+  }
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+
+  const maxId    = parseInt(res.headers.get("X-Export-Max-Id")    || "0");
+  const rowCount = parseInt(res.headers.get("X-Export-Row-Count") || "0");
+  const disp     = res.headers.get("Content-Disposition") || "";
+  const fnMatch  = disp.match(/filename="([^"]+)"/);
+  const filename = fnMatch ? fnMatch[1] : "aura_export.csv";
+
+  const blob = await res.blob();
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  return { maxId, rowCount };
+}
+
+function _showSettingsLogin() {
+  $("settings-login").classList.remove("hidden");
+  $("settings-panel").classList.add("hidden");
+}
+
+function _showSettingsPanel() {
+  $("settings-login").classList.add("hidden");
+  $("settings-panel").classList.remove("hidden");
+}
+
+function buildSettings() {
+  // Login form
+  $("btn-settings-login").addEventListener("click", _doSettingsLogin);
+  $("settings-password").addEventListener("keydown", e => {
+    if (e.key === "Enter") _doSettingsLogin();
+  });
+
+  // Lock button
+  $("btn-settings-logout").addEventListener("click", async () => {
+    try { await _settingsFetch("/api/auth/logout", { method: "POST" }); } catch (_) {}
+    _settingsClearToken();
+    _showSettingsLogin();
+    $("settings-password").value = "";
+  });
+
+  // Inner tab switching
+  document.querySelectorAll(".settings-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".settings-tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".settings-pane").forEach(p => p.classList.add("hidden"));
+      btn.classList.add("active");
+      $(`stab-${btn.dataset.stab}`).classList.remove("hidden");
+      if (btn.dataset.stab === "ml") _loadMlStatus();
+      if (btn.dataset.stab === "integrations") _loadIntegrationStatus();
+      if (btn.dataset.stab === "faults") _loadFaultStatus();
+    });
+  });
+
+  // Data tab buttons
+  $("btn-clear-sensor-data").addEventListener("click", async () => {
+    if (!confirm("Clear ALL sensor data and reset LSTM buffers? Cannot be undone.")) return;
+    try {
+      await _settingsFetch("/api/settings/data/sensor", { method: "DELETE" });
+      showToast("Sensor data cleared", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+  $("btn-clear-alert-history").addEventListener("click", async () => {
+    if (!confirm("Delete all alert history?")) return;
+    try {
+      await _settingsFetch("/api/settings/data/alerts", { method: "DELETE" });
+      showToast("Alert history cleared", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+  $("btn-clear-faults-settings").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/data/faults", { method: "DELETE" });
+      showToast("Faults cleared", "success");
+      await refreshLocationStates();
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+  $("btn-clear-lstm").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/data/lstm", { method: "DELETE" });
+      showToast("LSTM buffers cleared", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // Export CSV
+  $("btn-export-csv").addEventListener("click", async () => {
+    const btn = $("btn-export-csv");
+    btn.disabled = true;
+    btn.textContent = "Exporting…";
+    $("export-result").classList.add("hidden");
+    try {
+      const { maxId, rowCount } = await _settingsExportCsv();
+      _exportMaxId = maxId;
+      $("export-result-text").textContent = rowCount > 0
+        ? `✓ Export complete — ${rowCount.toLocaleString()} location readings (ticks through #${maxId.toLocaleString()})`
+        : "✓ Export complete — database was empty";
+      $("export-result").classList.remove("hidden");
+      $("btn-export-clear").disabled = maxId === 0;
+    } catch (e) {
+      showToast(`Export failed: ${e.message}`, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Export to CSV";
+    }
+  });
+  $("btn-export-keep").addEventListener("click", () => {
+    $("export-result").classList.add("hidden");
+    _exportMaxId = null;
+  });
+  $("btn-export-clear").addEventListener("click", async () => {
+    if (!confirm(
+      `Delete ${_exportMaxId.toLocaleString()} ticks of exported data?\n\nReadings generated after the export started are safe.`
+    )) return;
+    try {
+      const data = await _settingsFetch("/api/settings/data/exported", {
+        method: "DELETE",
+        body: JSON.stringify({ max_id: _exportMaxId }),
+      });
+      showToast(`Cleared ${data.deleted_rows.toLocaleString()} rows`, "success");
+      $("export-result").classList.add("hidden");
+      _exportMaxId = null;
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // Alert settings save
+  $("btn-save-alerts").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/alerts", {
+        method: "PATCH",
+        body: JSON.stringify({ updates: {
+          alert_min_consecutive:  parseInt($("s-alert-min-consecutive").value),
+          alert_cooldown_seconds: parseInt($("s-alert-cooldown").value),
+          alert_critical_rf_gate: parseFloat($("s-alert-critical-rf").value),
+          latch_threshold:        parseFloat($("s-latch-threshold").value),
+          latch_min_consecutive:  parseInt($("s-latch-min-consec").value),
+          dqn_rf_bypass_threshold: parseFloat($("s-dqn-bypass").value),
+        }}),
+      });
+      showToast("Alert settings saved", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // Generation settings save
+  $("btn-save-generation").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/generation", {
+        method: "PATCH",
+        body: JSON.stringify({ updates: {
+          tick_interval_seconds: parseFloat($("s-tick-interval").value),
+          noise_scale:           parseFloat($("s-noise-scale").value),
+          crew_event_frequency:  $("s-crew-freq").value,
+          fault_injection_enabled: $("s-fault-injection").checked,
+        }}),
+      });
+      showToast("Generation settings saved", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // Trend settings save
+  $("btn-save-trends").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/trends", {
+        method: "PATCH",
+        body: JSON.stringify({ updates: {
+          mk_p_threshold:          parseFloat($("s-mk-p").value),
+          mk_tau_advisory:         parseFloat($("s-mk-tau-advisory").value),
+          mk_tau_warning:          parseFloat($("s-mk-tau-warning").value),
+          slope_magnitude_gate:    parseFloat($("s-slope-gate").value),
+          cusum_threshold:         parseFloat($("s-cusum-threshold").value),
+          cusum_baseline_pct:      parseFloat($("s-cusum-baseline").value),
+          zscore_threshold:        parseFloat($("s-zscore-threshold").value),
+          zscore_single_threshold: parseFloat($("s-zscore-single").value),
+          zscore_window:           parseInt($("s-zscore-window").value),
+        }}),
+      });
+      showToast("Trend settings saved", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // Display settings save
+  $("btn-save-display").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/display", {
+        method: "PATCH",
+        body: JSON.stringify({ updates: {
+          mission_start_iso:   $("s-mission-start").value || null,
+          dashboard_refresh_ms: parseInt($("s-dashboard-refresh").value),
+          chat_max_stored:     parseInt($("s-chat-max").value),
+          trends_default_n:    parseInt($("s-trends-n").value),
+          detail_default_n:    parseInt($("s-detail-n").value),
+        }}),
+      });
+      showToast("Display settings saved", "success");
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // Groq key
+  $("btn-groq-show").addEventListener("click", () => {
+    const inp = $("s-groq-key");
+    inp.type = inp.type === "password" ? "text" : "password";
+    $("btn-groq-show").textContent = inp.type === "password" ? "Show" : "Hide";
+  });
+  $("btn-save-groq").addEventListener("click", async () => {
+    try {
+      await _settingsFetch("/api/settings/integrations/groq", {
+        method: "PATCH",
+        body: JSON.stringify({ updates: { groq_api_key: $("s-groq-key").value } }),
+      });
+      showToast("Groq API key saved", "success");
+      $("s-groq-key").value = "";
+      $("groq-status-badge").textContent = "saved";
+      $("groq-status-badge").className = "integration-badge ok";
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+  $("btn-test-groq").addEventListener("click", async () => {
+    const res = $("groq-test-result");
+    res.textContent = "Testing…";
+    res.className = "integration-result";
+    res.classList.remove("hidden");
+    try {
+      const data = await _settingsFetch("/api/settings/integrations/groq/test", { method: "POST", body: JSON.stringify({updates:{}}) });
+      if (data.ok) {
+        res.textContent = "✓ Connection successful";
+        res.className = "integration-result ok";
+        $("groq-status-badge").textContent = "connected";
+        $("groq-status-badge").className = "integration-badge ok";
+      } else {
+        res.textContent = `✗ ${data.error}`;
+        res.className = "integration-result error";
+        $("groq-status-badge").textContent = "error";
+        $("groq-status-badge").className = "integration-badge error";
+      }
+    } catch (e) {
+      res.textContent = `Error: ${e.message}`;
+      res.className = "integration-result error";
+    }
+  });
+
+  // Password change
+  $("btn-change-password").addEventListener("click", async () => {
+    const result = $("pw-change-result");
+    const newPw  = $("s-pw-new").value;
+    const confirm = $("s-pw-confirm").value;
+    if (newPw !== confirm) {
+      result.textContent = "New passwords do not match";
+      result.className = "settings-result error";
+      result.classList.remove("hidden");
+      return;
+    }
+    if (newPw.length < 6) {
+      result.textContent = "Password must be at least 6 characters";
+      result.className = "settings-result error";
+      result.classList.remove("hidden");
+      return;
+    }
+    try {
+      await _settingsFetch("/api/settings/security/change-password", {
+        method: "POST",
+        body: JSON.stringify({ current: $("s-pw-current").value, new_password: newPw }),
+      });
+      result.textContent = "✓ Password changed successfully";
+      result.className = "settings-result ok";
+      result.classList.remove("hidden");
+      $("s-pw-current").value = "";
+      $("s-pw-new").value = "";
+      $("s-pw-confirm").value = "";
+    } catch (e) {
+      result.textContent = e.message.includes("400") ? "Current password incorrect" : `Error: ${e.message}`;
+      result.className = "settings-result error";
+      result.classList.remove("hidden");
+    }
+  });
+
+  // Revoke all sessions
+  $("btn-revoke-sessions").addEventListener("click", async () => {
+    if (!confirm("This will log out ALL active sessions including yours. Continue?")) return;
+    try {
+      await _settingsFetch("/api/settings/security/revoke-all", { method: "POST", body: JSON.stringify({}) });
+    } catch (_) {}
+    _settingsClearToken();
+    _showSettingsLogin();
+    showToast("All sessions revoked", "info");
+  });
+
+  // Faults tab
+  $("btn-s-refresh-faults").addEventListener("click", _loadFaultStatus);
+  $("s-inject-fault").addEventListener("change", _updateFaultDesc);
+  $("btn-s-inject").addEventListener("click", async () => {
+    try {
+      await injectFault();
+      _loadFaultStatus();
+    } catch (_) {}
+  });
+  $("btn-s-clear-all-faults").addEventListener("click", async () => {
+    if (!confirm("Clear all injected faults?")) return;
+    try {
+      await apiDelete("/api/faults");
+      showToast("All faults cleared", "success");
+      await refreshLocationStates();
+      _loadFaultStatus();
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+  // Resolve individual fault via event delegation
+  $("s-active-faults-table").addEventListener("click", async e => {
+    const btn = e.target.closest("[data-resolve]");
+    if (!btn) return;
+    const loc = btn.dataset.resolve;
+    try {
+      await apiDelete(`/api/faults/${encodeURIComponent(loc)}`);
+      showToast(`Fault resolved: ${loc}`, "success");
+      await refreshLocationStates();
+      _loadFaultStatus();
+    } catch (e) { showToast(`Error: ${e.message}`, "error"); }
+  });
+
+  // If we already have a token from this session, go straight to panel
+  if (_settingsToken()) {
+    _showSettingsPanel();
+    _loadSettingsValues();
+  }
+}
+
+async function _doSettingsLogin() {
+  const pw  = $("settings-password").value;
+  const err = $("settings-login-error");
+  err.classList.add("hidden");
+  try {
+    const data = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pw }),
+    }).then(async r => {
+      if (!r.ok) throw new Error("Invalid password");
+      return r.json();
+    });
+    _settingsSaveToken(data.token);
+    $("settings-password").value = "";
+    _showSettingsPanel();
+    _loadSettingsValues();
+  } catch (e) {
+    err.textContent = "Invalid password";
+    err.classList.remove("hidden");
+  }
+}
+
+async function _loadSettingsValues() {
+  try {
+    const s = await _settingsFetch("/api/settings");
+    // Alerts
+    $("s-alert-min-consecutive").value = s.alert_min_consecutive;
+    $("s-alert-cooldown").value        = s.alert_cooldown_seconds;
+    $("s-alert-critical-rf").value     = s.alert_critical_rf_gate;
+    $("s-latch-threshold").value       = s.latch_threshold;
+    $("s-latch-min-consec").value      = s.latch_min_consecutive;
+    $("s-dqn-bypass").value            = s.dqn_rf_bypass_threshold;
+    // Generation
+    $("s-tick-interval").value  = s.tick_interval_seconds;
+    $("s-noise-scale").value    = s.noise_scale;
+    $("s-crew-freq").value      = s.crew_event_frequency;
+    $("s-fault-injection").checked = s.fault_injection_enabled;
+    // Trends
+    $("s-mk-p").value            = s.mk_p_threshold;
+    $("s-mk-tau-advisory").value = s.mk_tau_advisory;
+    $("s-mk-tau-warning").value  = s.mk_tau_warning;
+    $("s-slope-gate").value      = s.slope_magnitude_gate;
+    $("s-cusum-threshold").value = s.cusum_threshold;
+    $("s-cusum-baseline").value  = s.cusum_baseline_pct;
+    $("s-zscore-threshold").value = s.zscore_threshold;
+    $("s-zscore-single").value   = s.zscore_single_threshold;
+    $("s-zscore-window").value   = s.zscore_window;
+    // Display
+    $("s-mission-start").value      = s.mission_start_iso || "";
+    $("s-dashboard-refresh").value  = s.dashboard_refresh_ms;
+    $("s-chat-max").value           = s.chat_max_stored;
+    $("s-trends-n").value           = s.trends_default_n;
+    $("s-detail-n").value           = s.detail_default_n;
+    // Integrations
+    const badge = $("groq-status-badge");
+    if (s.groq_key_set) {
+      badge.textContent = "key saved";
+      badge.className = "integration-badge ok";
+    } else {
+      badge.textContent = "not configured";
+      badge.className = "integration-badge missing";
+    }
+  } catch (e) {
+    showToast(`Failed to load settings: ${e.message}`, "error");
+  }
+}
+
+async function _loadMlStatus() {
+  const container = $("ml-status-cards");
+  container.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const s = await _settingsFetch("/api/settings/ml/status");
+    const skMatch = s.sklearn_version === "1.8.0";
+    container.innerHTML = `
+      <div class="ml-status-card">
+        <div class="ml-status-card-name">Isolation Forest + Random Forest</div>
+        <div class="ml-status-card-row ${s.ml_enabled ? "ok" : "warn"}">${s.ml_enabled ? "✓ Loaded" : "✗ Not loaded"}</div>
+        <div class="ml-status-card-row ${skMatch ? "ok" : "warn"}">sklearn ${s.sklearn_version}${!skMatch ? " ⚠ Trained on 1.8.0 — retrain recommended" : ""}</div>
+      </div>
+      <div class="ml-status-card">
+        <div class="ml-status-card-name">LSTM Predictor</div>
+        <div class="ml-status-card-row ${s.lstm_enabled ? "ok" : "warn"}">${s.lstm_enabled ? "✓ Loaded" : "✗ Not loaded"}</div>
+      </div>
+      <div class="ml-status-card">
+        <div class="ml-status-card-name">DQN Recommender</div>
+        <div class="ml-status-card-row ${s.dqn_enabled ? "ok" : "warn"}">${s.dqn_enabled ? "✓ Loaded" : "✗ Not loaded"}</div>
+      </div>
+    `;
+  } catch (e) {
+    container.innerHTML = `<div class="loading">Error: ${e.message}</div>`;
+  }
+}
+
+async function _loadIntegrationStatus() {
+  try {
+    const s = await _settingsFetch("/api/settings");
+    const badge = $("groq-status-badge");
+    if (s.groq_key_set) {
+      badge.textContent = "key saved";
+      badge.className = "integration-badge ok";
+    } else {
+      badge.textContent = "not configured";
+      badge.className = "integration-badge missing";
+    }
+  } catch (_) {}
+}
+
+async function _loadFaultStatus() {
+  const container = $("s-active-faults-table");
+  container.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const states = await apiFetch("/api/locations");
+    const rows = Object.entries(states).map(([loc, s]) => {
+      const hasFault = s.active_fault;
+      return `<tr>
+        <td>${loc}</td>
+        <td class="${hasFault ? "fault-active" : "fault-none"}">${hasFault || "—"}</td>
+        <td>${hasFault
+          ? `<button class="btn btn-ghost btn-sm" data-resolve="${loc}">Resolve</button>`
+          : ""}</td>
+      </tr>`;
+    }).join("");
+    container.innerHTML = `
+      <table>
+        <thead><tr><th>Location</th><th>Active Fault</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  } catch (e) {
+    container.innerHTML = `<div class="loading">Error: ${e.message}</div>`;
+  }
+}
+
+function _updateFaultDesc() {
+  const fault = $("s-inject-fault").value;
+  const panel = $("s-fault-desc");
+  if (!fault || !state.config) { panel.classList.add("hidden"); return; }
+  const precursor = state.config.fault_precursor_hours?.[fault];
+  const impacts   = state.config.fault_impacts?.[fault] || [];
+  panel.innerHTML = `
+    <div class="fdp-name">${fault}</div>
+    <div class="fdp-row">Precursor window: <span>${precursor != null ? precursor + " h" : "—"}</span></div>
+    <div class="fdp-row">Affected parameters: <span>${impacts.join(", ") || "—"}</span></div>`;
+  panel.classList.remove("hidden");
 }
 
 // ── Start ────────────────────────────────────────────────────────────────────
