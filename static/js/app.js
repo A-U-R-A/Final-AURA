@@ -356,7 +356,10 @@ async function injectFault() {
   const location = $("s-inject-location").value;
   const fault = $("s-inject-fault").value;
   try {
-    await apiPost("/api/faults/inject", { location, fault });
+    await _settingsFetch("/api/faults/inject", {
+      method: "POST",
+      body: JSON.stringify({ location, fault }),
+    });
     showToast(`Fault injected: ${fault} @ ${location}`, "info");
     await refreshLocationStates();
   } catch (e) {
@@ -366,7 +369,7 @@ async function injectFault() {
 
 async function clearAllFaults() {
   try {
-    await apiDelete("/api/faults");
+    await _settingsFetch("/api/faults", { method: "DELETE" });
     showToast("All faults cleared", "success");
     await refreshLocationStates();
   } catch (e) {
@@ -2020,7 +2023,7 @@ function buildSettings() {
   $("btn-s-clear-all-faults").addEventListener("click", async () => {
     if (!confirm("Clear all injected faults?")) return;
     try {
-      await apiDelete("/api/faults");
+      await _settingsFetch("/api/faults", { method: "DELETE" });
       showToast("All faults cleared", "success");
       await refreshLocationStates();
       _loadFaultStatus();
@@ -2032,7 +2035,7 @@ function buildSettings() {
     if (!btn) return;
     const loc = btn.dataset.resolve;
     try {
-      await apiDelete(`/api/faults/${encodeURIComponent(loc)}`);
+      await _settingsFetch(`/api/faults/${encodeURIComponent(loc)}`, { method: "DELETE" });
       showToast(`Fault resolved: ${loc}`, "success");
       await refreshLocationStates();
       _loadFaultStatus();
