@@ -71,7 +71,7 @@ fi
 source "${VENV_DIR}/bin/activate"
 info "Activated."
 
-PYTHON_CMD="python"   # use venv python from here on
+PYTHON_CMD="${VIRTUAL_ENV}/bin/python"   # use venv python from here on
 export PYTHONIOENCODING=utf-8
 
 # ── 3. Install / upgrade dependencies ───────────────────────
