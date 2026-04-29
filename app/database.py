@@ -46,52 +46,47 @@ class Database:
         Idempotent — safe to call every startup."""
         with self._connect() as conn:
             conn.executescript("""
-                CREATE TABLE IF NOT EXISTS faults (
-                    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                CREATE TABLE IF NOT EXISTS fault_types (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     fault_name TEXT NOT NULL UNIQUE
                 );
 
                 CREATE TABLE IF NOT EXISTS locations (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    location_name   TEXT NOT NULL UNIQUE,
-                    current_fault_id INTEGER REFERENCES faults(id)
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    location_name TEXT NOT NULL UNIQUE
                 );
 
                 CREATE TABLE IF NOT EXISTS generated_data (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    location_id INTEGER NOT NULL REFERENCES locations(id),
-                    data        TEXT NOT NULL,
-                    timestamp   TEXT NOT NULL
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data TEXT NOT NULL,
+                    recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    location_id INTEGER NOT NULL,
+                    FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_data_location_ts
-                    ON generated_data(location_id, timestamp DESC);
-
-                CREATE TABLE IF NOT EXISTS anomaly_labels (
-                    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    data_row_id                 INTEGER NOT NULL UNIQUE REFERENCES generated_data(id),
-                    isolation_forest_label      INTEGER NOT NULL,
-                    random_forest_classification TEXT
+                CREATE TABLE IF NOT EXISTS fault_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    location_id INTEGER NOT NULL,
+                    fault_type_id INTEGER NOT NULL,
+                    detected_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (fault_type_id) REFERENCES fault_types(id) ON DELETE RESTRICT
                 );
 
-                CREATE TABLE IF NOT EXISTS alerts (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    location_name   TEXT NOT NULL,
-                    timestamp       TEXT NOT NULL,
-                    severity        TEXT NOT NULL DEFAULT 'WARNING',
-                    fault_type      TEXT,
-                    top_probability REAL,
-                    sensor_data     TEXT,
-                    acknowledged    INTEGER NOT NULL DEFAULT 0
+                CREATE TABLE IF NOT EXISTS model_predictions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data_id INTEGER NOT NULL,
+                    model_name TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    confidence_score REAL,
+                    predicted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (data_id) REFERENCES generated_data(id) ON DELETE CASCADE
                 );
-
-                CREATE INDEX IF NOT EXISTS idx_alerts_location_ts
-                    ON alerts(location_name, timestamp DESC);
             """)
 
             for fault in constants.FAULT_IMPACT_SEVERITY:
                 conn.execute(
-                    "INSERT OR IGNORE INTO faults (fault_name) VALUES (?)",
+                    "INSERT OR IGNORE INTO fault_types (fault_name) VALUES (?)",
                     (fault,)
                 )
 
